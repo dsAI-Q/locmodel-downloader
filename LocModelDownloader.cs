@@ -17,8 +17,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.3.0")]
-[assembly: AssemblyFileVersion("1.1.3.0")]
+[assembly: AssemblyVersion("1.1.4.0")]
+[assembly: AssemblyFileVersion("1.1.4.0")]
 
 namespace LocModelDownloader
 {
@@ -254,6 +254,33 @@ namespace LocModelDownloader
                 return null;
             }
             catch (Exception ex) { return "读取失败：" + ex.Message; }
+        }
+
+        // 按链接域名判断来源（用户经常直接粘链接，不该让他自己去切下拉）
+        public static bool TryDetectSource(string input, out Source src)
+        {
+            src = Source.HF;
+            if (string.IsNullOrEmpty(input)) return false;
+            string t = input.Trim().ToLowerInvariant();
+            if (!t.StartsWith("http")) return false;
+            if (t.Contains("modelscope.cn") || t.Contains("modelscope.com")) { src = Source.MS; return true; }
+            if (t.Contains("civitai.com")) { src = Source.Civitai; return true; }
+            if (t.Contains("huggingface.co") || t.Contains("hf-mirror.net") || t.Contains("hf-mirror.com")) { src = Source.HF; return true; }
+            return false;
+        }
+
+        // 从「文件页」链接里取出具体文件名，列表加载后自动勾上
+        public static string FileFromUrl(string input)
+        {
+            if (string.IsNullOrEmpty(input)) return null;
+            string t = input.Trim();
+            int q = t.IndexOfAny(new char[] { '?', '#' });
+            if (q >= 0) t = t.Substring(0, q);
+            Match m = Regex.Match(t, @"/(?:blob|tree|resolve)/[^/]+/(.+)$", RegexOptions.IgnoreCase);
+            if (m.Success) return Uri.UnescapeDataString(m.Groups[1].Value);
+            m = Regex.Match(t, @"/file/view/[^/]+/(.+)$", RegexOptions.IgnoreCase);
+            if (m.Success) return Uri.UnescapeDataString(m.Groups[1].Value);
+            return null;
         }
 
         // 用户常把「文件名」或「网页路径」当仓库名粘进来，单独识别一下
@@ -3236,10 +3263,10 @@ namespace LocModelDownloader
             txtLog.BackColor = Color.White; txtLog.Font = new Font("Consolas", 8.5f);
             txtLog.Text =
                 "使用方法（全部走 aria2 多线程，支持断点续传）：" + Environment.NewLine +
-                "1. HuggingFace：来源选 HuggingFace，填 owner/仓库名（例 mradermacher/xxx-GGUF）→ 获取文件列表 → 勾选 → 开始下载。" + Environment.NewLine +
-                "2. 魔塔 ModelScope：来源选 ModelScope，填 owner/仓库名（例 Qwen/Qwen2.5-7B-Instruct-GGUF），步骤同上。" + Environment.NewLine +
-                "3. C站 Civitai：来源选 Civitai，填版本 ID 或模型页链接；只填文件名不行，需能访问 civitai.com。" + Environment.NewLine +
-                "注：三站都只认仓库/版本，不认「文件名」；只有文件名请先去站点找到它所在的仓库。" + Environment.NewLine +
+                "1. HuggingFace：填 owner/仓库名，或直接粘贴仓库页 / 文件页链接（粘链接会自动切换来源）。" + Environment.NewLine +
+                "2. 魔塔 ModelScope：同上，owner/仓库名或链接都行。" + Environment.NewLine +
+                "3. C站 Civitai：填版本 ID 或模型页链接；只填文件名不行，需能访问 civitai.com。" + Environment.NewLine +
+                "注：三站都只认仓库/版本，不认「文件名」；粘文件页链接会自动勾中那个文件。" + Environment.NewLine +
                 "图片/视频模型请用「图片/视频配方下载」；多任务用「批量队列」；校验已下载的文件用「校验文件」。";
 
             Controls.AddRange(new Control[] {
@@ -3639,10 +3666,34 @@ namespace LocModelDownloader
 
         async void LoadList()
         {
-            Source src = Src;
             string raw = txtRepo.Text.Trim();
+            Source src = Src;
+
+            // 支持与队列一致的 hf: / ms: / cv: 前缀
+            if (raw.StartsWith("ms:", StringComparison.OrdinalIgnoreCase)) { src = Source.MS; raw = raw.Substring(3).Trim(); }
+            else if (raw.StartsWith("cv:", StringComparison.OrdinalIgnoreCase)) { src = Source.Civitai; raw = raw.Substring(4).Trim(); }
+            else if (raw.StartsWith("hf:", StringComparison.OrdinalIgnoreCase)) { src = Source.HF; raw = raw.Substring(3).Trim(); }
+
+            bool isUrl = raw.StartsWith("http", StringComparison.OrdinalIgnoreCase);
+            Source det;
+            if (isUrl)
+            {
+                if (!Core.TryDetectSource(raw, out det))
+                {
+                    MessageBox.Show("这个链接不是 HuggingFace / 魔塔 / C站 的地址，工具只支持这三站。\r\n\r\n" + raw, "不支持的网站");
+                    return;
+                }
+                src = det;
+            }
+            if (src != Src)
+            {
+                cboSource.SelectedIndex = src == Source.MS ? 1 : (src == Source.Civitai ? 2 : 0);
+                lblStatus.Text = "已按链接自动切换来源：" +
+                    (src == Source.MS ? "魔塔 ModelScope" : (src == Source.Civitai ? "C站 Civitai" : "HuggingFace"));
+            }
+
             string repo = (src == Source.Civitai) ? raw : Core.NormRepo(raw);
-            if (Core.LooksLikeModelFile(raw))
+            if (!isUrl && Core.LooksLikeModelFile(raw))
             {
                 string tip;
                 if (src == Source.Civitai)
@@ -3685,6 +3736,27 @@ namespace LocModelDownloader
                 lblTarget.Text = "保存到：" + Path.Combine(modelsDir, Core.FolderFor(key));
                 lblStatus.Text = "共 " + list.Count + " 个文件";
                 if (list.Count == 0) MessageBox.Show("仓库里没有文件，或仓库名不对。", "提示");
+
+                // 如果粘的是「文件页」链接，自动勾中那个文件
+                string wantFile = Core.FileFromUrl(raw);
+                if (!string.IsNullOrEmpty(wantFile) && list.Count > 0)
+                {
+                    bool hit = false;
+                    for (int i = 0; i < clb.Items.Count; i++)
+                    {
+                        Core.FileEntry fe = clb.Items[i] as Core.FileEntry;
+                        if (fe == null) continue;
+                        if (string.Equals(fe.Name, wantFile, StringComparison.OrdinalIgnoreCase) ||
+                            fe.Name.EndsWith("/" + wantFile, StringComparison.OrdinalIgnoreCase))
+                        {
+                            clb.SetItemChecked(i, true);
+                            hit = true;
+                            lblStatus.Text = "已自动勾选：" + fe.Name;
+                            break;
+                        }
+                    }
+                    if (!hit) lblStatus.Text = "共 " + list.Count + " 个文件（链接里的文件名没在列表中找到）";
+                }
             }
             catch (Exception ex)
             {
