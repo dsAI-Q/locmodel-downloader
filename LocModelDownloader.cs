@@ -18,8 +18,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.9.0")]
-[assembly: AssemblyFileVersion("1.1.9.0")]
+[assembly: AssemblyVersion("1.1.10.0")]
+[assembly: AssemblyFileVersion("1.1.10.0")]
 
 namespace LocModelDownloader
 {
@@ -160,6 +160,7 @@ namespace LocModelDownloader
             public string Url;
             public string SaveAs;
             public string Hash;   // sha256（HF 的 lfs.sha256 / 魔塔的 Sha256 / C站的 hashes.SHA256），站点没给就是 null
+            public string Revision; // 魔塔的版本（master 或 ?version= 指定的快照）
             public override string ToString() { return Name + "    (" + Fmt(Size) + ")"; }
         }
 
@@ -332,6 +333,19 @@ namespace LocModelDownloader
             {
                 string f = Uri.UnescapeDataString(m.Groups[1].Value).Trim('/');
                 return f.Length == 0 ? null : f;
+            }
+            return null;
+        }
+
+        // 魔塔的版本快照：链接里的 ?version=时间戳 / ?revision=xxx
+        public static string RevisionFromUrl(string input)
+        {
+            if (string.IsNullOrEmpty(input)) return null;
+            Match m = Regex.Match(input.Trim(), @"[?&](?:version|revision)=([^&#]+)", RegexOptions.IgnoreCase);
+            if (m.Success)
+            {
+                string v = Uri.UnescapeDataString(m.Groups[1].Value).Trim();
+                return v.Length == 0 ? null : v;
             }
             return null;
         }
@@ -605,6 +619,7 @@ namespace LocModelDownloader
             public string Url;
             public long Size;      // 站点给的期望大小（0 = 未知）
             public string Hash;    // 站点给的 sha256（null = 没给）
+            public string Revision; // 魔塔版本（master 或 ?version=）
         }
 
         public class JobItem
@@ -736,7 +751,7 @@ namespace LocModelDownloader
                     {
                         Dictionary<string, object> o = new Dictionary<string, object>();
                         o["repo"] = f2.Repo; o["path"] = f2.Path; o["saveAs"] = f2.SaveAs; o["dir"] = f2.Dir; o["url"] = f2.Url;
-                        o["size"] = f2.Size; o["hash"] = f2.Hash;
+                        o["size"] = f2.Size; o["hash"] = f2.Hash; o["revision"] = f2.Revision;
                         fs.Add(o);
                     }
                     d["files"] = fs;
@@ -800,6 +815,7 @@ namespace LocModelDownloader
                             long fsz;
                             if (fd.ContainsKey("size") && long.TryParse(Convert.ToString(fd["size"]), out fsz)) jf.Size = fsz;
                             jf.Hash = fd.ContainsKey("hash") ? Convert.ToString(fd["hash"]) : null;
+                            jf.Revision = fd.ContainsKey("revision") ? Convert.ToString(fd["revision"]) : null;
                             j.Files.Add(jf);
                         }
                     }
@@ -831,7 +847,8 @@ namespace LocModelDownloader
             return -1;
         }
 
-        public static JobItem ResolveRepoJob(Source src, string mirror, string repo, string onlyFile, string modelsDir)
+        public static JobItem ResolveRepoJob(Source src, string mirror, string repo, string onlyFile, string modelsDir,
+            string revision = null)
         {
             JobItem j = new JobItem();
             j.Kind = "repo";
@@ -842,7 +859,7 @@ namespace LocModelDownloader
                 j.Repo = repo;
             }
             else j.Repo = NormRepo(repo);
-            List<FileEntry> all = FetchFiles(src, mirror, repo);
+            List<FileEntry> all = FetchFiles(src, mirror, repo, revision);
             List<FileEntry> pick = new List<FileEntry>();
             if (src == Source.Civitai)
             {
@@ -892,6 +909,19 @@ namespace LocModelDownloader
                 if (chosen != null) pick.Add(chosen);
                 if (chosen != null)
                     foreach (FileEntry f in PlanSet(all, chosen)) pick.Add(f);
+
+                // 没有 gguf（常见于 LoRA / safetensors 仓库）：退而求其次，排权重文件
+                if (pick.Count == 0)
+                {
+                    foreach (FileEntry f in all)
+                    {
+                        if (f.Size <= 0) continue;
+                        string n = f.Name.ToLowerInvariant();
+                        if (n.EndsWith(".safetensors") || n.EndsWith(".bin") || n.EndsWith(".pt") ||
+                            n.EndsWith(".pth") || n.EndsWith(".ckpt") || n.EndsWith(".onnx"))
+                            pick.Add(f);
+                    }
+                }
             }
             string dir = Path.Combine(modelsDir, src == Source.Civitai ? "civitai-" + SafeName(j.Repo) : FolderFor(j.Repo));
             foreach (FileEntry f in pick)
@@ -900,6 +930,7 @@ namespace LocModelDownloader
                 jf.Repo = j.Repo; jf.Path = f.Name;
                 jf.SaveAs = string.IsNullOrEmpty(f.SaveAs) ? f.Name : f.SaveAs;
                 jf.Dir = dir;
+                jf.Revision = string.IsNullOrEmpty(f.Revision) ? revision : f.Revision;
                 jf.Url = f.Url;
                 jf.Size = f.Size;
                 jf.Hash = f.Hash;
@@ -1540,11 +1571,16 @@ namespace LocModelDownloader
 
         public static List<FileEntry> FetchFiles(Source src, string mirror, string repo)
         {
+            return FetchFiles(src, mirror, repo, null);
+        }
+
+        public static List<FileEntry> FetchFiles(Source src, string mirror, string repo, string revision)
+        {
             int attempts = 0;
             while (true)
             {
                 attempts++;
-                try { return FetchFilesOnce(src, mirror, repo); }
+                try { return FetchFilesOnce(src, mirror, repo, revision); }
                 catch (AuthNeeded) { throw; }
                 catch (WebException we)
                 {
@@ -1555,10 +1591,10 @@ namespace LocModelDownloader
             }
         }
 
-        static List<FileEntry> FetchFilesOnce(Source src, string mirror, string repo)
+        static List<FileEntry> FetchFilesOnce(Source src, string mirror, string repo, string revision)
         {
             List<FileEntry> list;
-            if (src == Source.MS) list = FetchModelScope(repo);
+            if (src == Source.MS) list = FetchModelScope(repo, revision);
             else if (src == Source.Civitai) list = FetchCivitai(repo);
             else list = FetchHf(mirror, repo);
             list.Sort(delegate (FileEntry a, FileEntry b)
@@ -1629,10 +1665,11 @@ namespace LocModelDownloader
             return list;
         }
 
-        static List<FileEntry> FetchModelScope(string repo)
+        static List<FileEntry> FetchModelScope(string repo, string revision)
         {
             string r = NormRepo(repo);
-            string url = MsBase + "/api/v1/models/" + r + "/repo/files?Revision=master&Recursive=true";
+            string rev = string.IsNullOrEmpty(revision) ? "master" : revision.Trim();
+            string url = MsBase + "/api/v1/models/" + r + "/repo/files?Revision=" + Uri.EscapeDataString(rev) + "&Recursive=true";
             HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
             req.UserAgent = "Mozilla/5.0 LocModelDownloader";
             req.Timeout = 30000;
@@ -1669,6 +1706,7 @@ namespace LocModelDownloader
 
                 FileEntry fe = new FileEntry();
                 fe.Repo = r;
+                fe.Revision = rev;
                 string path = d.ContainsKey("Path") ? Convert.ToString(d["Path"]) : "";
                 if (string.IsNullOrEmpty(path) && d.ContainsKey("Name")) path = Convert.ToString(d["Name"]);
                 fe.Name = path;
@@ -1802,12 +1840,15 @@ namespace LocModelDownloader
             return list;
         }
 
-        public static string UrlFor(Source src, string mirror, string repo, string subPath)
+        public static string UrlFor(Source src, string mirror, string repo, string subPath, string revision = null)
         {
             StringBuilder u = new StringBuilder();
             u.Append(src == Source.MS ? MsBase + "/models/" : mirror.TrimEnd('/') + "/");
             foreach (string p in NormRepo(repo).Split('/')) u.Append(Uri.EscapeDataString(p)).Append('/');
-            u.Append(src == Source.MS ? "resolve/master/" : "resolve/main/");
+            if (src == Source.MS)
+                u.Append("resolve/").Append(string.IsNullOrEmpty(revision) ? "master" : revision.Trim()).Append('/');
+            else
+                u.Append("resolve/main/");
             foreach (string p in subPath.Split('/')) u.Append(Uri.EscapeDataString(p)).Append('/');
             u.Length -= 1;
             return u.ToString();
@@ -1886,7 +1927,7 @@ namespace LocModelDownloader
 
         public static int RunAriaTo(Source src, string mirror, string repo, string subPath, string saveAs, string targetDir,
             Action<string> log, Func<bool> cancelled, out string error, string urlOverride = null,
-            long expectSize = -1, string expectHash = null)
+            long expectSize = -1, string expectHash = null, string revision = null)
         {
             error = null;
             string aria = FindAria();
@@ -1964,7 +2005,7 @@ namespace LocModelDownloader
             }
             if (resumable && log != null) log("=== 断点续传：" + saveAs);
 
-            string url = string.IsNullOrEmpty(urlOverride) ? UrlFor(src, mirror, repo, subPath) : urlOverride;
+            string url = string.IsNullOrEmpty(urlOverride) ? UrlFor(src, mirror, repo, subPath, revision) : urlOverride;
             // 令牌按来源各用各的：绝不要把 HF 的令牌发给别的站
             string tok = src == Source.MS ? SanitizeToken(Secrets.Ms) : (src == Source.Civitai ? "" : SanitizeToken(Secrets.Hf));
             if (src == Source.Civitai && !string.IsNullOrEmpty(Secrets.Civitai))
@@ -2904,7 +2945,8 @@ namespace LocModelDownloader
                         Say("解析 " + repo2 + " …");
                         string r2 = repo2, f2 = file;
                         Source ss = s2;
-                        job = await Task.Run(() => Core.ResolveRepoJob(ss, mirror, r2, f2, modelsDir));
+                        string rev2 = Core.RevisionFromUrl(line);
+                        job = await Task.Run(() => Core.ResolveRepoJob(ss, mirror, r2, f2, modelsDir, rev2));
                         if (job.Files.Count == 0)
                         {
                             Say("没解析出文件：" + line + "（该仓库可能没有 .gguf，请用 owner/repo :: 文件名 指定，或回主界面勾选）");
@@ -3017,7 +3059,7 @@ namespace LocModelDownloader
                         {
                             string inner;
                             int r = Core.RunAriaTo(jsrc, mirror, f.Repo, f.Path, f.SaveAs, f.Dir, Say,
-                                delegate { return pauseFlag || skipFlag; }, out inner, f.Url, f.Size, f.Hash);
+                                delegate { return pauseFlag || skipFlag; }, out inner, f.Url, f.Size, f.Hash, f.Revision);
                             err = inner;
                             return r;
                         });
@@ -3241,7 +3283,8 @@ namespace LocModelDownloader
                 {
                     Say("正在获取仓库文件列表…（" + repo + "）");
                     string rp = repo;
-                    list = await Task.Run(() => Core.FetchFiles(src, mirror, rp));
+                    string rv = Core.RevisionFromUrl(txtRepo.Text);
+                    list = await Task.Run(() => Core.FetchFiles(src, mirror, rp, rv));
                     if (list == null || list.Count == 0) { txtOut.AppendText("仓库没有列出任何文件。\r\n"); return; }
                     txtOut.AppendText("仓库共 " + list.Count + " 个文件，开始逐个校验：\r\n\r\n");
                 }
@@ -4081,12 +4124,12 @@ namespace LocModelDownloader
                     "\r\n\r\n请重启 LocModel 后查看。", "完成");
         }
 
-        async Task<List<Core.FileEntry>> FetchWithAuth(Source src, string mirror, string repo)
+        async Task<List<Core.FileEntry>> FetchWithAuth(Source src, string mirror, string repo, string revision)
         {
             int attempt = 0;
             while (true)
             {
-                try { return await Task.Run(() => Core.FetchFiles(src, mirror, repo)); }
+                try { return await Task.Run(() => Core.FetchFiles(src, mirror, repo, revision)); }
                 catch (AuthNeeded)
                 {
                     attempt++;
@@ -4165,7 +4208,7 @@ namespace LocModelDownloader
             string mirror = EffectiveHfMirror;
             try
             {
-                List<Core.FileEntry> list = await FetchWithAuth(src, mirror, repo);
+                List<Core.FileEntry> list = await FetchWithAuth(src, mirror, repo, Core.RevisionFromUrl(raw));
                 files = list;
                 ignoreChecks = true;
                 clb.Items.Clear();
@@ -4295,7 +4338,7 @@ namespace LocModelDownloader
                         string useRepo = string.IsNullOrEmpty(f.Repo) ? repo : f.Repo;
                         string useSaveAs = string.IsNullOrEmpty(f.SaveAs) ? f.Name : f.SaveAs;
                         int r = Core.RunAriaTo(src, mirror, useRepo, f.Name, useSaveAs, dir, LogUi,
-                            delegate { return cancelFlag; }, out inner, f.Url, f.Size, f.Hash);
+                            delegate { return cancelFlag; }, out inner, f.Url, f.Size, f.Hash, f.Revision);
                         err = inner;
                         return r;
                     });
@@ -4401,7 +4444,7 @@ namespace LocModelDownloader
                 if (args.Length < 2) { Console.WriteLine("usage: --list <repo>"); return 2; }
                 Source s; string repo;
                 SplitSrc(args[1], out s, out repo);
-                List<Core.FileEntry> l = Core.FetchFiles(s, Core.DefaultMirror, repo);
+                List<Core.FileEntry> l = Core.FetchFiles(s, Core.DefaultMirror, repo, Core.RevisionFromUrl(args[1]));
                 foreach (Core.FileEntry f in l)
                 {
                     Console.WriteLine(f.Name + "\t" + f.Size + (string.IsNullOrEmpty(f.Url) ? "" : "\t" + f.Url));
@@ -4413,7 +4456,7 @@ namespace LocModelDownloader
                 if (args.Length < 3) { Console.WriteLine("usage: --plan <repo> <file>"); return 2; }
                 Source s; string repo;
                 SplitSrc(args[1], out s, out repo);
-                List<Core.FileEntry> all = Core.FetchFiles(s, Core.DefaultMirror, repo);
+                List<Core.FileEntry> all = Core.FetchFiles(s, Core.DefaultMirror, repo, Core.RevisionFromUrl(args[1]));
                 Core.FileEntry main = null;
                 foreach (Core.FileEntry f in all) if (f.Name == args[2]) main = f;
                 if (main == null) { Console.WriteLine("not found: " + args[2]); return 2; }
@@ -4426,7 +4469,7 @@ namespace LocModelDownloader
                 if (args.Length < 3) { Console.WriteLine("usage: --check <repo> <file> [file...]"); return 2; }
                 Source s; string repo;
                 SplitSrc(args[1], out s, out repo);
-                List<Core.FileEntry> all = Core.FetchFiles(s, Core.DefaultMirror, repo);
+                List<Core.FileEntry> all = Core.FetchFiles(s, Core.DefaultMirror, repo, Core.RevisionFromUrl(args[1]));
                 List<Core.FileEntry> sel = new List<Core.FileEntry>();
                 for (int i = 2; i < args.Length; i++)
                 {
@@ -4447,17 +4490,18 @@ namespace LocModelDownloader
                 SplitSrc(args[1], out s, out repo);
                 string mir = args.Length > 4 ? args[4] : Core.DefaultMirror;
                 long esz = -1; string eh = null;
-                string useRepo = repo, useUrl = null;
+                string useRepo = repo, useUrl = null, rev = Core.RevisionFromUrl(args[1]);
                 bool metaOk = false;
                 try
                 {
-                    foreach (Core.FileEntry fe in Core.FetchFiles(s, mir, repo))
+                    foreach (Core.FileEntry fe in Core.FetchFiles(s, mir, repo, rev))
                     {
                         if (string.Equals(fe.Name, args[2], StringComparison.OrdinalIgnoreCase))
                         {
                             esz = fe.Size; eh = fe.Hash; metaOk = true;
                             if (!string.IsNullOrEmpty(fe.Repo)) useRepo = fe.Repo;
                             if (!string.IsNullOrEmpty(fe.Url)) useUrl = fe.Url;
+                            if (!string.IsNullOrEmpty(fe.Revision)) rev = fe.Revision;
                             break;
                         }
                     }
@@ -4466,7 +4510,7 @@ namespace LocModelDownloader
                 if (!metaOk) Console.WriteLine("警告：没拿到站点元数据，本次下载不做大小/哈希校验。");
                 string err;
                 int rc = Core.RunAriaTo(s, mir, useRepo, args[2], args[2], args[3],
-                    delegate (string x) { Console.WriteLine(x); }, null, out err, useUrl, esz, eh);
+                    delegate (string x) { Console.WriteLine(x); }, null, out err, useUrl, esz, eh, rev);
                 if (rc != 0) { Console.WriteLine("FAILED: " + err); return rc; }
                 Console.WriteLine(Core.VerifyMode == "off"
                     ? "OK: 下载完成（未校验，verify=off）"
@@ -4572,7 +4616,7 @@ namespace LocModelDownloader
                 string folderHint = Core.FolderFromUrl(a1);
                 string onlyFile = a2 ?? (folderHint != null ? folderHint + "/" : (ahint ?? ""));
                 Core.JobItem job = Core.ResolveRepoJob(asrc, Core.DefaultMirror, arepo, onlyFile,
-                    Core.DetectModelsDir());
+                    Core.DetectModelsDir(), Core.RevisionFromUrl(a1));
                 if (job.Files.Count == 0) { Console.WriteLine("解析失败"); return 1; }
                 foreach (Core.JobItem e in q)
                 {
@@ -4596,7 +4640,7 @@ namespace LocModelDownloader
                     Source vs; string vr;
                     SplitSrc(args[2], out vs, out vr);
                     if (vs == Source.Civitai) vr = Core.ResolveCivitaiVersion(vr);
-                    vlist = Core.FetchFiles(vs, Core.DefaultMirror, vr);
+                    vlist = Core.FetchFiles(vs, Core.DefaultMirror, vr, Core.RevisionFromUrl(args[2]));
                 }
                 Console.WriteLine("文件: " + vfile);
                 Console.WriteLine("大小: " + va + " 字节  (" + Core.Fmt(va) + ")");
