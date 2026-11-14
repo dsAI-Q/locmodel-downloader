@@ -18,8 +18,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.8.0")]
-[assembly: AssemblyFileVersion("1.1.8.0")]
+[assembly: AssemblyVersion("1.1.9.0")]
+[assembly: AssemblyFileVersion("1.1.9.0")]
 
 namespace LocModelDownloader
 {
@@ -316,6 +316,23 @@ namespace LocModelDownloader
             if (m.Success) return Uri.UnescapeDataString(m.Groups[1].Value.TrimEnd('/'));
             m = Regex.Match(t, @"/file/view/[^/]+/(.+)$", RegexOptions.IgnoreCase);
             if (m.Success) return Uri.UnescapeDataString(m.Groups[1].Value.TrimEnd('/'));
+            return null;
+        }
+
+        // 从「目录页」链接里取出子目录（HF /tree/main/style、魔塔 /tree/master/style）
+        public static string FolderFromUrl(string input)
+        {
+            if (string.IsNullOrEmpty(input)) return null;
+            string t = input.Trim();
+            int q = t.IndexOfAny(new char[] { '?', '#' });
+            if (q >= 0) t = t.Substring(0, q);
+            t = t.TrimEnd('/');
+            Match m = Regex.Match(t, @"/tree/[^/]+/(.+)$", RegexOptions.IgnoreCase);
+            if (m.Success)
+            {
+                string f = Uri.UnescapeDataString(m.Groups[1].Value).Trim('/');
+                return f.Length == 0 ? null : f;
+            }
             return null;
         }
 
@@ -841,7 +858,20 @@ namespace LocModelDownloader
             }
             else if (!string.IsNullOrEmpty(onlyFile))
             {
-                foreach (FileEntry f in all) if (f.Name == onlyFile) pick.Add(f);
+                if (onlyFile.EndsWith("/"))
+                {
+                    // 目录链接：整目录入队（跳过 0 字节占位文件）
+                    string prefix = onlyFile.TrimEnd('/') + "/";
+                    foreach (FileEntry f in all)
+                        if (f.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && f.Size > 0) pick.Add(f);
+                }
+                else
+                {
+                    foreach (FileEntry f in all) if (f.Name == onlyFile) pick.Add(f);
+                    if (pick.Count == 0)
+                        foreach (FileEntry f in all)
+                            if (f.Name.EndsWith("/" + onlyFile, StringComparison.OrdinalIgnoreCase)) pick.Add(f);
+                }
             }
             else
             {
@@ -2865,7 +2895,12 @@ namespace LocModelDownloader
                         if (p > 0) { repoLine = line.Substring(0, p).Trim(); file = line.Substring(p + 2).Trim(); }
                         Source s2; string repo2; string hint;
                         Core.ParseRepoInput(repoLine, Source.HF, out s2, out repo2, out hint);
-                        if (string.IsNullOrEmpty(file) && !string.IsNullOrEmpty(hint)) file = hint;   // 粘文件页链接时自动定位文件
+                        if (string.IsNullOrEmpty(file))
+                        {
+                            string folder = Core.FolderFromUrl(repoLine);
+                            if (!string.IsNullOrEmpty(folder)) file = folder + "/";   // 目录链接：整目录
+                            else if (!string.IsNullOrEmpty(hint)) file = hint;         // 文件页链接：定位到文件
+                        }
                         Say("解析 " + repo2 + " …");
                         string r2 = repo2, f2 = file;
                         Source ss = s2;
@@ -4163,6 +4198,24 @@ namespace LocModelDownloader
                     }
                     if (!hit) lblStatus.Text = "共 " + list.Count + " 个文件（链接里的文件名没在列表中找到）";
                 }
+
+                // 如果是目录链接，勾中该目录下所有文件
+                string wantFolder = Core.FolderFromUrl(raw);
+                if (!string.IsNullOrEmpty(wantFolder) && list.Count > 0)
+                {
+                    int n = 0;
+                    for (int i = 0; i < clb.Items.Count; i++)
+                    {
+                        Core.FileEntry fe = clb.Items[i] as Core.FileEntry;
+                        if (fe == null) continue;
+                        if (fe.Name.StartsWith(wantFolder + "/", StringComparison.OrdinalIgnoreCase))
+                        {
+                            clb.SetItemChecked(i, true);
+                            n++;
+                        }
+                    }
+                    if (n > 0) lblStatus.Text = "已自动勾选目录 " + wantFolder + "/ 下 " + n + " 个文件";
+                }
             }
             catch (Exception ex)
             {
@@ -4498,7 +4551,8 @@ namespace LocModelDownloader
             {
                 if (args.Length < 2) { Console.WriteLine("usage: --addqueue <repo> [file]"); return 2; }
                 Mutex guiMtx;
-                if (Mutex.TryOpenExisting("LocModelDownloader_SingleInstance", out guiMtx))
+                if (Environment.GetEnvironmentVariable("LOCMODEL_DL_ALLOW_MULTI") != "1" &&
+                    Mutex.TryOpenExisting("LocModelDownloader_SingleInstance", out guiMtx))
                 {
                     try { guiMtx.Dispose(); } catch { }
                     Console.WriteLine("GUI 正在运行：请关掉下载器（或先在它的队列窗口）再改队列，避免两边互相覆盖。");
@@ -4515,7 +4569,8 @@ namespace LocModelDownloader
                 }
                 Source asrc; string arepo; string ahint;
                 Core.ParseRepoInput(a1, Source.HF, out asrc, out arepo, out ahint);
-                string onlyFile = a2 ?? (ahint ?? "");
+                string folderHint = Core.FolderFromUrl(a1);
+                string onlyFile = a2 ?? (folderHint != null ? folderHint + "/" : (ahint ?? ""));
                 Core.JobItem job = Core.ResolveRepoJob(asrc, Core.DefaultMirror, arepo, onlyFile,
                     Core.DetectModelsDir());
                 if (job.Files.Count == 0) { Console.WriteLine("解析失败"); return 1; }
