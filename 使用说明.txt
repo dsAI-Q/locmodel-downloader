@@ -24,6 +24,7 @@ LocModel 模型下载器（便携版）
      ms:owner/repo               魔塔 ModelScope，同上
      cv:版本ID                    C站 Civitai，下载该版本的全部文件
      owner/repo :: 文件名        指定某个文件（ms: 前缀同样可用）
+     owner/repo :: *             该仓库的全部文件（不限扩展名，可拿来下 ComfyUI 等其它工具的模型）
      recipe:z-image-turbo Q8_0   整条图片/视频配方
 
    同一来源、同一仓库（同配方同量化）重复添加会自动跳过，不会排两遍。
@@ -44,6 +45,8 @@ LocModel 模型下载器（便携版）
 
 目录说明
 --------
+- 下载到哪：默认用 LocModel 的模型目录；点右上「模型目录」可以改成任意目录（比如 ComfyUI 的 models），改完会记住。
+
 - aria2c.exe          内置下载引擎，别删，也别改名
 - 自检.exe            排障用（--doctor / --findmodels / --queue）
 - LocModel模型下载器.exe  主程序

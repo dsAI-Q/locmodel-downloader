@@ -18,8 +18,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.10.0")]
-[assembly: AssemblyFileVersion("1.1.10.0")]
+[assembly: AssemblyVersion("1.1.11.0")]
+[assembly: AssemblyFileVersion("1.1.11.0")]
 
 namespace LocModelDownloader
 {
@@ -861,7 +861,13 @@ namespace LocModelDownloader
             else j.Repo = NormRepo(repo);
             List<FileEntry> all = FetchFiles(src, mirror, repo, revision);
             List<FileEntry> pick = new List<FileEntry>();
-            if (src == Source.Civitai)
+            if (string.Equals(onlyFile, "*", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(onlyFile, "all", StringComparison.OrdinalIgnoreCase))
+            {
+                // 整仓库所有文件（不限扩展名，可用于 ComfyUI / 其它工具）
+                foreach (FileEntry f in all) if (f.Size > 0) pick.Add(f);
+            }
+            else if (src == Source.Civitai)
             {
                 if (!string.IsNullOrEmpty(onlyFile))
                 {
@@ -2837,7 +2843,7 @@ namespace LocModelDownloader
             lblHint.SetBounds(16, 252, 716, 34);
             lblHint.ForeColor = Color.Gray;
             lblHint.Text = "owner/repo（HF）｜ ms:owner/repo（魔塔）｜ cv:版本ID 或 C站模型链接（C站）——自动选量化或全部文件\r\n" +
-                           "owner/repo :: 文件名（指定单个文件）｜ recipe:配方id 量化（图片/视频模型）";
+                           "owner/repo :: 文件名（指定单个文件）｜ repo :: *（整个仓库全部文件）｜ recipe:配方id 量化（图片/视频模型）";
 
             txtAdd = new TextBox(); txtAdd.SetBounds(16, 290, 716, 60);
             txtAdd.Multiline = true; txtAdd.ScrollBars = ScrollBars.Vertical;
