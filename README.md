@@ -2,7 +2,7 @@
 
 给 [LocModel](https://github.com/) 这类本地模型运行器配的模型下载工具（Windows）。可以同时从 **HuggingFace、魔塔 ModelScope、C站 Civitai** 三站下载，全部走 `aria2c` 多线程，支持断点续传、批量排队、下载后校验。
 
-![主界面](screenshots/main.png)
+![主界面](screenshots/main-1.1.2.png)
 
 ## 功能
 
