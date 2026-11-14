@@ -1,8 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.IO.Compression;
 using System.Net;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -17,8 +18,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.6.0")]
-[assembly: AssemblyFileVersion("1.1.6.0")]
+[assembly: AssemblyVersion("1.1.7.0")]
+[assembly: AssemblyFileVersion("1.1.7.0")]
 
 namespace LocModelDownloader
 {
@@ -1228,6 +1229,19 @@ namespace LocModelDownloader
         public static string FindAria()
         {
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+
+            // 自动安装位置（数据目录下的 aria2\）
+            try
+            {
+                string dd = DataDir();
+                if (!string.IsNullOrEmpty(dd))
+                {
+                    string installed = Path.Combine(dd, "aria2", "aria2c.exe");
+                    if (File.Exists(installed)) return installed;
+                }
+            }
+            catch { }
+
             string[] local =
             {
                 Path.Combine(baseDir, "aria2c.exe"),
@@ -1263,6 +1277,106 @@ namespace LocModelDownloader
             };
             foreach (string p in fixedPaths) if (File.Exists(p)) return p;
             return null;
+        }
+
+        // ---------- 自动安装 aria2 ----------
+
+        public const string Aria2Version = "1.37.0";
+        public const string Aria2Url = "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip";
+        public const string Aria2Sha256 = "BE2099C214F63A3CB4954B09A0BECD6E2E34660B886D4C898D260FEBFE9D70C2";
+
+        public static string AriaInstallDir()
+        {
+            try
+            {
+                string dir = DataDir();
+                return dir == null ? null : Path.Combine(dir, "aria2");
+            }
+            catch { return null; }
+        }
+
+        // 从 aria2 官方发布包下载并校验后安装到数据目录；返回 aria2c.exe 路径
+        public static string InstallAria2(Action<string> log)
+        {
+            string dir = AriaInstallDir();
+            if (dir == null) throw new Exception("找不到可写的数据目录，无法自动安装。");
+            Directory.CreateDirectory(dir);
+            string exe = Path.Combine(dir, "aria2c.exe");
+
+            // 有些机器的 TEMP 根目录不允许直接建文件，改用自己的子目录（失败就退回数据目录）
+            string tmpDir = null;
+            try
+            {
+                tmpDir = Path.Combine(Path.GetTempPath(), "locmodel_aria_" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(tmpDir);
+            }
+            catch { tmpDir = null; }
+            if (tmpDir == null || !Directory.Exists(tmpDir))
+            {
+                tmpDir = Path.Combine(dir, "tmp_" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(tmpDir);
+            }
+            string tmpZip = Path.Combine(tmpDir, "aria2.zip");
+            string tmpExe = Path.Combine(tmpDir, "aria2c.exe");
+            try
+            {
+                if (log != null) log("正在下载 aria2 " + Aria2Version + "（约 2.4 MB）…");
+                try
+                {
+                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create(Aria2Url);
+                    req.UserAgent = "Mozilla/5.0 LocModelDownloader";
+                    req.Timeout = 120000;
+                    req.ReadWriteTimeout = 120000;
+                    req.AllowAutoRedirect = true;
+                    if (!string.IsNullOrEmpty(proxy)) req.Proxy = new WebProxy(proxy);
+                    using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                    using (Stream rs = resp.GetResponseStream())
+                    using (FileStream fs = new FileStream(tmpZip, FileMode.Create, FileAccess.Write))
+                        rs.CopyTo(fs);
+                }
+                catch (WebException we)
+                {
+                    string code = "";
+                    try
+                    {
+                        HttpWebResponse hr = we.Response as HttpWebResponse;
+                        if (hr != null) code = "（HTTP " + (int)hr.StatusCode + "）";
+                    }
+                    catch { }
+                    string detail = we.Message;
+                    if (we.InnerException != null) detail += " / " + we.InnerException.Message;
+                    throw new Exception("下载 aria2 失败" + code + "：" + detail +
+                                        "\r\n可手动下载：" + Aria2Url);
+                }
+
+                if (log != null) log("下载完成，正在解压并校验…");
+                bool found = false;
+                using (ZipArchive za = ZipFile.OpenRead(tmpZip))
+                {
+                    foreach (ZipArchiveEntry e in za.Entries)
+                    {
+                        if (!string.Equals(e.Name, "aria2c.exe", StringComparison.OrdinalIgnoreCase)) continue;
+                        e.ExtractToFile(tmpExe, true);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) throw new Exception("下载的压缩包里没有 aria2c.exe。");
+
+                string h = Sha256File(tmpExe, null);
+                if (!string.Equals(h, Aria2Sha256, StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("aria2c.exe 校验失败（哈希不符），已中止安装。\r\n实际：" + h);
+
+                try { if (File.Exists(exe)) File.Delete(exe); } catch { }
+                File.Copy(tmpExe, exe, true);
+                if (log != null) log("已安装：" + exe);
+                Log("自动安装 aria2 完成: " + exe);
+                return exe;
+            }
+            finally
+            {
+                try { if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true); } catch { }
+            }
         }
 
         // ---------- 列表 ----------
@@ -3081,6 +3195,48 @@ namespace LocModelDownloader
         }
     }
 
+    class AriaInstallForm : Form
+    {
+        Label lbl;
+        public string Error;
+
+        public AriaInstallForm()
+        {
+            Text = "自动安装 aria2";
+            Width = 500; Height = 150;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            StartPosition = FormStartPosition.CenterParent;
+            MaximizeBox = false; MinimizeBox = false; ControlBox = false;
+            Font = new Font("Microsoft YaHei UI", 9f);
+            Core.ApplyIcon(this);
+
+            lbl = new Label();
+            lbl.SetBounds(16, 26, 450, 44);
+            lbl.Text = "正在准备…";
+            Controls.Add(lbl);
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            Task t = Task.Run(delegate
+            {
+                try
+                {
+                    Core.InstallAria2(delegate (string s)
+                    {
+                        try { BeginInvoke(new Action(delegate { lbl.Text = s; })); } catch { }
+                    });
+                }
+                catch (Exception ex) { Error = ex.Message; }
+            });
+            t.ContinueWith(delegate
+            {
+                try { BeginInvoke(new Action(delegate { Close(); })); } catch { }
+            });
+        }
+    }
+
     class MainForm : Form
     {
         TextBox txtRepo, txtMirror, txtLog;
@@ -3338,6 +3494,8 @@ namespace LocModelDownloader
             base.OnShown(e);
             if (Program.ShotMode) return;   // 截图模式：不做清理、不弹窗、不动用户文件
 
+            EnsureAria2();   // 没有 aria2 时问一次要不要自动安装
+
             int stale = Core.CleanStaleParts(modelsDir, LogUi);
             if (stale > 0) LogUi("=== 已清理 " + stale + " 个残留 .part（对应文件已完整）");
 
@@ -3495,6 +3653,49 @@ namespace LocModelDownloader
         }
 
         // 下载期间统一锁住会互相干扰的按钮（队列/校验/目录/配方/接管）
+        // 下载期统一锁按钮的辅助方法之后放 aria2 检查
+        bool EnsureAria2()
+        {
+            if (Core.FindAria() != null) return true;
+
+            DialogResult r = MessageBox.Show(this,
+                "没有找到下载引擎 aria2c.exe。\r\n\r\n" +
+                "要现在自动下载安装吗？约 2.4 MB，来自 aria2 官方 GitHub 发布包，装好后会校验 SHA256。\r\n\r\n" +
+                "点「否」跳过：你也可以自己把 aria2c.exe 放到程序目录（或系统 PATH）后重启本工具。",
+                "缺少下载引擎", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+
+            if (r != DialogResult.Yes)
+            {
+                if (r == DialogResult.No)
+                    lblStatus.Text = "未安装 aria2：把 aria2c.exe 放到程序目录后重启本工具";
+                return false;
+            }
+
+            try
+            {
+                using (AriaInstallForm f = new AriaInstallForm())
+                {
+                    f.ShowDialog(this);
+                    if (!string.IsNullOrEmpty(f.Error)) throw new Exception(f.Error);
+                }
+                string p = Core.FindAria();
+                if (p != null)
+                {
+                    lblStatus.Text = "aria2 已安装：" + p;
+                    return true;
+                }
+                MessageBox.Show(this, "安装后仍然找不到 aria2c.exe，请手动把 aria2c.exe 放到程序目录。", "安装失败");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "自动安装失败：" + ex.Message +
+                    "\r\n\r\n可以手动下载：\r\n" + Core.Aria2Url + "\r\n解压后把 aria2c.exe 放到程序目录。",
+                    "安装失败");
+                return false;
+            }
+        }
+
         void SetBusyUi(bool b)
         {
             busy = b;
@@ -3511,6 +3712,7 @@ namespace LocModelDownloader
         async void Takeover()
         {
             if (busy) return;
+            if (!EnsureAria2()) return;
             btnTakeover.Enabled = false;
             List<Core.Partial> ps = new List<Core.Partial>();
             try { ps = await Task.Run(() => Core.ScanPartials(modelsDir)); }
@@ -3577,6 +3779,7 @@ namespace LocModelDownloader
         async void DownloadRecipeSet(Core.JobItem job, string title)
         {
             if (busy) return;
+            if (!EnsureAria2()) return;
 
             lblStatus.Text = "正在统计配方大小…";
             long need = 0;
@@ -3796,6 +3999,7 @@ namespace LocModelDownloader
         async void StartDownload()
         {
             if (busy) return;
+            if (!EnsureAria2()) return;
             if (clb.CheckedItems.Count == 0) { MessageBox.Show(this, "请先勾选要下载的文件。", "提示"); return; }
 
             Source src = Src;
@@ -4188,6 +4392,16 @@ namespace LocModelDownloader
                 }
                 Console.WriteLine("结果: 没填仓库，只算了大小和 sha256（未与站点比对）");
                 return 3;
+            }
+            if (args.Length > 0 && args[0] == "--installaria")
+            {
+                try
+                {
+                    string p = Core.InstallAria2(delegate (string s) { Console.WriteLine(s); });
+                    Console.WriteLine("OK: " + p);
+                    return 0;
+                }
+                catch (Exception ex) { Console.WriteLine("FAILED: " + ex.ToString()); return 1; }
             }
             if (args.Length > 0 && args[0] == "--doctor")
             {
