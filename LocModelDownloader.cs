@@ -17,8 +17,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.4.0")]
-[assembly: AssemblyFileVersion("1.1.4.0")]
+[assembly: AssemblyVersion("1.1.5.0")]
+[assembly: AssemblyFileVersion("1.1.5.0")]
 
 namespace LocModelDownloader
 {
@@ -292,6 +292,25 @@ namespace LocModelDownloader
             foreach (string e in exts) if (t.EndsWith(e)) return true;
             if (t.Contains("/file/view/") || t.Contains("\\file\\view\\")) return true;
             return false;
+        }
+
+        // 统一入口：把用户输入（仓库名 / 链接 / ms: 前缀）解析成「来源 + 仓库 + 文件提示」。
+        // 主界面、批量队列、校验窗、命令行都必须走这里，避免同一段链接在不同入口被当成不同站点。
+        public static void ParseRepoInput(string raw, Source current, out Source src, out string repo, out string fileHint)
+        {
+            src = current;
+            repo = (raw ?? "").Trim();
+            fileHint = null;
+
+            if (repo.StartsWith("ms:", StringComparison.OrdinalIgnoreCase)) { src = Source.MS; repo = repo.Substring(3).Trim(); }
+            else if (repo.StartsWith("cv:", StringComparison.OrdinalIgnoreCase)) { src = Source.Civitai; repo = repo.Substring(4).Trim(); }
+            else if (repo.StartsWith("hf:", StringComparison.OrdinalIgnoreCase)) { src = Source.HF; repo = repo.Substring(3).Trim(); }
+
+            Source det;
+            if (TryDetectSource(repo, out det)) src = det;   // 链接域名优先于下拉框
+
+            fileHint = FileFromUrl(repo);
+            repo = (src == Source.Civitai) ? repo.Trim() : NormRepo(repo);
         }
 
         public static string NormRepo(string input)
@@ -2607,14 +2626,14 @@ namespace LocModelDownloader
                     }
                     else
                     {
-                        string repo = line, file = "";
+                        string repoLine = line, file = "";
                         int p = line.IndexOf("::");
-                        if (p > 0) { repo = line.Substring(0, p).Trim(); file = line.Substring(p + 2).Trim(); }
-                        Source s2 = Source.HF;
-                        if (repo.StartsWith("ms:", StringComparison.OrdinalIgnoreCase)) { s2 = Source.MS; repo = repo.Substring(3).Trim(); }
-                        else if (repo.StartsWith("cv:", StringComparison.OrdinalIgnoreCase)) { s2 = Source.Civitai; repo = repo.Substring(3).Trim(); }
-                        Say("解析 " + repo + " …");
-                        string r2 = repo, f2 = file;
+                        if (p > 0) { repoLine = line.Substring(0, p).Trim(); file = line.Substring(p + 2).Trim(); }
+                        Source s2; string repo2; string hint;
+                        Core.ParseRepoInput(repoLine, Source.HF, out s2, out repo2, out hint);
+                        if (string.IsNullOrEmpty(file) && !string.IsNullOrEmpty(hint)) file = hint;   // 粘文件页链接时自动定位文件
+                        Say("解析 " + repo2 + " …");
+                        string r2 = repo2, f2 = file;
                         Source ss = s2;
                         job = await Task.Run(() => Core.ResolveRepoJob(ss, mirror, r2, f2, modelsDir));
                         if (job.Files.Count == 0)
@@ -2935,7 +2954,13 @@ namespace LocModelDownloader
 
             Source src = cboSource.SelectedIndex == 2 ? Source.Civitai :
                          (cboSource.SelectedIndex == 1 ? Source.MS : Source.HF);
-            string repo = txtRepo.Text.Trim();
+            Source psrc; string repo; string hint;
+            Core.ParseRepoInput(txtRepo.Text.Trim(), src, out psrc, out repo, out hint);
+            if (psrc != src)
+            {
+                src = psrc;
+                cboSource.SelectedIndex = psrc == Source.MS ? 1 : (psrc == Source.Civitai ? 2 : 0);
+            }
             List<Core.FileEntry> list = null;
 
             stopFlag = false;
@@ -3149,19 +3174,23 @@ namespace LocModelDownloader
             btnQueue = new Button(); btnQueue.Text = "批量队列"; btnQueue.SetBounds(648, 144, 110, 26);
             btnQueue.Click += delegate
             {
+                // 预填也要按链接识别来源，否则粘魔塔/C站链接会把任务错标成 HF
+                Source psrc; string prepo; string phint;
+                Core.ParseRepoInput(txtRepo.Text.Trim(), Src, out psrc, out prepo, out phint);
+
                 StringBuilder pf = new StringBuilder();
-                if (Src == Source.Civitai)
+                if (psrc == Source.Civitai)
                 {
-                    pf.AppendLine("cv:" + txtRepo.Text.Trim());
+                    pf.AppendLine("cv:" + prepo);
                 }
                 else
                 {
-                    string srcPrefix = Src == Source.MS ? "ms:" : "";
+                    string srcPrefix = psrc == Source.MS ? "ms:" : "";
                     foreach (object o in clb.CheckedItems)
                     {
                         Core.FileEntry fe = o as Core.FileEntry;
                         if (fe == null) continue;
-                        string repo = string.IsNullOrEmpty(fe.Repo) ? Core.NormRepo(txtRepo.Text) : fe.Repo;
+                        string repo = string.IsNullOrEmpty(fe.Repo) ? prepo : fe.Repo;
                         pf.AppendLine(srcPrefix + repo + " :: " + fe.Name);
                     }
                 }
@@ -3667,24 +3696,22 @@ namespace LocModelDownloader
         async void LoadList()
         {
             string raw = txtRepo.Text.Trim();
-            Source src = Src;
 
-            // 支持与队列一致的 hf: / ms: / cv: 前缀
-            if (raw.StartsWith("ms:", StringComparison.OrdinalIgnoreCase)) { src = Source.MS; raw = raw.Substring(3).Trim(); }
-            else if (raw.StartsWith("cv:", StringComparison.OrdinalIgnoreCase)) { src = Source.Civitai; raw = raw.Substring(4).Trim(); }
-            else if (raw.StartsWith("hf:", StringComparison.OrdinalIgnoreCase)) { src = Source.HF; raw = raw.Substring(3).Trim(); }
-
-            bool isUrl = raw.StartsWith("http", StringComparison.OrdinalIgnoreCase);
+            // 先剥掉 ms:/cv:/hf: 前缀，再判断是不是 URL
+            string probe = raw;
+            if (probe.StartsWith("ms:", StringComparison.OrdinalIgnoreCase)) probe = probe.Substring(3).Trim();
+            else if (probe.StartsWith("cv:", StringComparison.OrdinalIgnoreCase)) probe = probe.Substring(4).Trim();
+            else if (probe.StartsWith("hf:", StringComparison.OrdinalIgnoreCase)) probe = probe.Substring(3).Trim();
+            bool isUrl = probe.StartsWith("http", StringComparison.OrdinalIgnoreCase);
             Source det;
-            if (isUrl)
+            if (isUrl && !Core.TryDetectSource(probe, out det))
             {
-                if (!Core.TryDetectSource(raw, out det))
-                {
-                    MessageBox.Show("这个链接不是 HuggingFace / 魔塔 / C站 的地址，工具只支持这三站。\r\n\r\n" + raw, "不支持的网站");
-                    return;
-                }
-                src = det;
+                MessageBox.Show("这个链接不是 HuggingFace / 魔塔 / C站 的地址，工具只支持这三站。\r\n\r\n" + probe, "不支持的网站");
+                return;
             }
+
+            Source src; string repo; string fileHint;
+            Core.ParseRepoInput(raw, Src, out src, out repo, out fileHint);
             if (src != Src)
             {
                 cboSource.SelectedIndex = src == Source.MS ? 1 : (src == Source.Civitai ? 2 : 0);
@@ -3692,8 +3719,7 @@ namespace LocModelDownloader
                     (src == Source.MS ? "魔塔 ModelScope" : (src == Source.Civitai ? "C站 Civitai" : "HuggingFace"));
             }
 
-            string repo = (src == Source.Civitai) ? raw : Core.NormRepo(raw);
-            if (!isUrl && Core.LooksLikeModelFile(raw))
+            if (!isUrl && Core.LooksLikeModelFile(probe))
             {
                 string tip;
                 if (src == Source.Civitai)
@@ -3738,7 +3764,7 @@ namespace LocModelDownloader
                 if (list.Count == 0) MessageBox.Show("仓库里没有文件，或仓库名不对。", "提示");
 
                 // 如果粘的是「文件页」链接，自动勾中那个文件
-                string wantFile = Core.FileFromUrl(raw);
+                string wantFile = fileHint;
                 if (!string.IsNullOrEmpty(wantFile) && list.Count > 0)
                 {
                     bool hit = false;
@@ -3920,10 +3946,14 @@ namespace LocModelDownloader
 
         static void SplitSrc(string arg, out Source src, out string repo)
         {
-            src = Source.HF;
-            repo = arg;
-            if (arg.StartsWith("ms:", StringComparison.OrdinalIgnoreCase)) { src = Source.MS; repo = arg.Substring(3); }
-            else if (arg.StartsWith("cv:", StringComparison.OrdinalIgnoreCase)) { src = Source.Civitai; repo = arg.Substring(3); }
+            // 和界面一致：命令行也按链接域名自动判断来源
+            string hint;
+            Core.ParseRepoInput(arg, Source.HF, out src, out repo, out hint);
+        }
+
+        static void SplitSrc(string arg, Source current, out Source src, out string repo, out string fileHint)
+        {
+            Core.ParseRepoInput(arg, current, out src, out repo, out fileHint);
         }
 
         static int Run(string[] args)
@@ -4094,9 +4124,10 @@ namespace LocModelDownloader
                     return 3;
                 }
                 List<Core.JobItem> q = Core.LoadQueue();
-                Source asrc; string arepo;
-                SplitSrc(args[1], out asrc, out arepo);
-                Core.JobItem job = Core.ResolveRepoJob(asrc, Core.DefaultMirror, arepo, args.Length > 2 ? args[2] : "",
+                Source asrc; string arepo; string ahint;
+                Core.ParseRepoInput(args[1], Source.HF, out asrc, out arepo, out ahint);
+                string onlyFile = args.Length > 2 ? args[2] : (ahint ?? "");
+                Core.JobItem job = Core.ResolveRepoJob(asrc, Core.DefaultMirror, arepo, onlyFile,
                     Core.DetectModelsDir());
                 if (job.Files.Count == 0) { Console.WriteLine("解析失败"); return 1; }
                 foreach (Core.JobItem e in q)
