@@ -7,7 +7,7 @@ LocModel 模型下载器（便携版）
    若出现「Windows 已保护你的电脑」，点「更多信息」->「仍要运行」。
    便携包已内置 aria2c.exe；如果你用的是单文件版，首次启动会问要不要自动下载安装（约 2.4 MB，官方包 + SHA256 校验）。
 2. 来源选 HuggingFace / ModelScope / Civitai，填仓库名或版本 ID，点「获取文件列表」。
-   也可以直接粘贴网页链接，工具会自动识别来源：
+   也可以直接粘贴网页链接，工具会自动识别来源（带不带 https:// 都行，www. 也认）：
      HuggingFace  仓库页、/tree/main 页、/blob/main/文件名 页都行
      ModelScope   仓库页、文件列表页（含 /file/view/ 链接）都行
      Civitai      模型版本 ID、模型主页链接（自动取该模型最新公开版本）、带 modelVersionId 的链接

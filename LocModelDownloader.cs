@@ -18,8 +18,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.7.0")]
-[assembly: AssemblyFileVersion("1.1.7.0")]
+[assembly: AssemblyVersion("1.1.8.0")]
+[assembly: AssemblyFileVersion("1.1.8.0")]
 
 namespace LocModelDownloader
 {
@@ -257,30 +257,65 @@ namespace LocModelDownloader
             catch (Exception ex) { return "读取失败：" + ex.Message; }
         }
 
+        // 三站域名（含 www. / modelscope.com 等变体），识别和归一化共用
+        static bool IsKnownModelHost(string host)
+        {
+            if (string.IsNullOrEmpty(host)) return false;
+            string h = host.Trim().ToLowerInvariant();
+            if (h.StartsWith("www.")) h = h.Substring(4);
+            if (h == "huggingface.co" || h == "hf-mirror.net" || h == "hf-mirror.com") return true;
+            if (h == "modelscope.cn" || h == "modelscope.com") return true;
+            if (h == "civitai.com" || h.EndsWith(".civitai.com")) return true;
+            return false;
+        }
+
+        static string HostOf(string s)
+        {
+            string h = s.ToLowerInvariant();
+            if (h.StartsWith("www.")) h = h.Substring(4);
+            return h;
+        }
+
         // 按链接域名判断来源（用户经常直接粘链接，不该让他自己去切下拉）
         public static bool TryDetectSource(string input, out Source src)
         {
             src = Source.HF;
             if (string.IsNullOrEmpty(input)) return false;
-            string t = input.Trim().ToLowerInvariant();
-            if (!t.StartsWith("http")) return false;
-            if (t.Contains("modelscope.cn") || t.Contains("modelscope.com")) { src = Source.MS; return true; }
-            if (t.Contains("civitai.com")) { src = Source.Civitai; return true; }
-            if (t.Contains("huggingface.co") || t.Contains("hf-mirror.net") || t.Contains("hf-mirror.com")) { src = Source.HF; return true; }
-            return false;
+
+            string probe = input.Trim();
+            if (!probe.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !probe.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                // 允许省略协议：modelscope.cn/models/... 这种也要认
+                string first = probe.Split('/')[0];
+                if (IsKnownModelHost(first)) probe = "https://" + probe;
+                else return false;
+            }
+
+            Uri u;
+            if (!Uri.TryCreate(probe, UriKind.Absolute, out u)) return false;
+            if (u.Scheme != "http" && u.Scheme != "https") return false;
+            if (!IsKnownModelHost(u.Host)) return false;
+
+            string h = HostOf(u.Host);
+            if (h == "modelscope.cn" || h == "modelscope.com") src = Source.MS;
+            else if (h == "civitai.com" || h.EndsWith(".civitai.com")) src = Source.Civitai;
+            else src = Source.HF;
+            return true;
         }
 
-        // 从「文件页」链接里取出具体文件名，列表加载后自动勾上
+        // 从「文件页」链接里取出具体文件名，列表加载后自动勾上（tree 目录不算）
         public static string FileFromUrl(string input)
         {
             if (string.IsNullOrEmpty(input)) return null;
             string t = input.Trim();
             int q = t.IndexOfAny(new char[] { '?', '#' });
             if (q >= 0) t = t.Substring(0, q);
-            Match m = Regex.Match(t, @"/(?:blob|tree|resolve)/[^/]+/(.+)$", RegexOptions.IgnoreCase);
-            if (m.Success) return Uri.UnescapeDataString(m.Groups[1].Value);
+            t = t.TrimEnd('/');
+            Match m = Regex.Match(t, @"/(?:blob|resolve)/[^/]+/(.+)$", RegexOptions.IgnoreCase);
+            if (m.Success) return Uri.UnescapeDataString(m.Groups[1].Value.TrimEnd('/'));
             m = Regex.Match(t, @"/file/view/[^/]+/(.+)$", RegexOptions.IgnoreCase);
-            if (m.Success) return Uri.UnescapeDataString(m.Groups[1].Value);
+            if (m.Success) return Uri.UnescapeDataString(m.Groups[1].Value.TrimEnd('/'));
             return null;
         }
 
@@ -304,11 +339,14 @@ namespace LocModelDownloader
             fileHint = null;
 
             if (repo.StartsWith("ms:", StringComparison.OrdinalIgnoreCase)) { src = Source.MS; repo = repo.Substring(3).Trim(); }
-            else if (repo.StartsWith("cv:", StringComparison.OrdinalIgnoreCase)) { src = Source.Civitai; repo = repo.Substring(4).Trim(); }
+            else if (repo.StartsWith("cv:", StringComparison.OrdinalIgnoreCase)) { src = Source.Civitai; repo = repo.Substring(3).Trim(); }
             else if (repo.StartsWith("hf:", StringComparison.OrdinalIgnoreCase)) { src = Source.HF; repo = repo.Substring(3).Trim(); }
 
             Source det;
             if (TryDetectSource(repo, out det)) src = det;   // 链接域名优先于下拉框
+
+            // 纯数字当成 C站版本 ID（仓库名不可能只有数字，避免用户还要手动切来源）
+            if (src != Source.Civitai && Regex.IsMatch(repo, @"^\d{3,}$")) src = Source.Civitai;
 
             fileHint = FileFromUrl(repo);
             repo = (src == Source.Civitai) ? repo.Trim() : NormRepo(repo);
@@ -318,16 +356,31 @@ namespace LocModelDownloader
         {
             if (input == null) return "";
             string s = input.Trim();
-            s = s.Replace("https://", "").Replace("http://", "");
+
+            // 先按 URL 解析（带协议，或开头就是已知站点域名），统一处理 www. / modelscope.com / 大写协议
+            string probe = s;
+            if (!probe.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !probe.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                string first = probe.Split('/')[0];
+                if (IsKnownModelHost(first)) probe = "https://" + probe;
+            }
+            Uri u;
+            if (Uri.TryCreate(probe, UriKind.Absolute, out u) &&
+                (u.Scheme == "http" || u.Scheme == "https") && IsKnownModelHost(u.Host))
+            {
+                string[] seg = u.AbsolutePath.Trim('/').Split(new char[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+                int i = 0;
+                if (seg.Length > 0 && (seg[0].Equals("models", StringComparison.OrdinalIgnoreCase) ||
+                                       seg[0].Equals("datasets", StringComparison.OrdinalIgnoreCase))) i = 1;
+                if (seg.Length >= i + 2) return seg[i] + "/" + seg[i + 1];
+                return "";
+            }
+
+            // 普通 owner/repo（粘贴的页面路径只保留前两段）
             int q = s.IndexOfAny(new char[] { '?', '#' });
             if (q >= 0) s = s.Substring(0, q);
-            string[] hosts = { "hf-mirror.net/", "hf-mirror.com/", "huggingface.co/", "modelscope.cn/models/", "modelscope.cn/" };
-            foreach (string h in hosts)
-            {
-                if (s.StartsWith(h, StringComparison.OrdinalIgnoreCase)) { s = s.Substring(h.Length); break; }
-            }
             s = s.Trim('/');
-            // 粘贴的是页面链接时，后面还会带 tree/main、blob/main/xx、files、resolve/main/xx 等路径，只保留 owner/repo
             string[] parts = s.Split('/');
             if (parts.Length > 2) s = parts[0] + "/" + parts[1];
             return s;
@@ -776,7 +829,15 @@ namespace LocModelDownloader
             List<FileEntry> pick = new List<FileEntry>();
             if (src == Source.Civitai)
             {
-                foreach (FileEntry f in all) pick.Add(f);
+                if (!string.IsNullOrEmpty(onlyFile))
+                {
+                    foreach (FileEntry f in all)
+                        if (string.Equals(f.Name, onlyFile, StringComparison.OrdinalIgnoreCase)) pick.Add(f);
+                    if (pick.Count == 0)
+                        foreach (FileEntry f in all)
+                            if (f.Name.EndsWith("/" + onlyFile, StringComparison.OrdinalIgnoreCase)) pick.Add(f);
+                }
+                else foreach (FileEntry f in all) pick.Add(f);
             }
             else if (!string.IsNullOrEmpty(onlyFile))
             {
@@ -1226,6 +1287,13 @@ namespace LocModelDownloader
             catch { }
         }
 
+        // aria2c.exe 至少要有 512 KB，避免把 0 字节/截断文件当成可用
+        static bool AriaOk(string p)
+        {
+            try { return !string.IsNullOrEmpty(p) && File.Exists(p) && new FileInfo(p).Length > 512 * 1024; }
+            catch { return false; }
+        }
+
         public static string FindAria()
         {
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
@@ -1237,7 +1305,7 @@ namespace LocModelDownloader
                 if (!string.IsNullOrEmpty(dd))
                 {
                     string installed = Path.Combine(dd, "aria2", "aria2c.exe");
-                    if (File.Exists(installed)) return installed;
+                    if (AriaOk(installed)) return installed;
                 }
             }
             catch { }
@@ -1249,7 +1317,7 @@ namespace LocModelDownloader
                 Path.Combine(baseDir, "tools", "aria2c.exe"),
                 Path.Combine(baseDir, "tools", "aria2", "aria2c.exe")
             };
-            foreach (string p in local) if (File.Exists(p)) return p;
+            foreach (string p in local) if (AriaOk(p)) return p;
 
             try
             {
@@ -1257,7 +1325,7 @@ namespace LocModelDownloader
                 if (Directory.Exists(tools))
                 {
                     string[] found = Directory.GetFiles(tools, "aria2c.exe", SearchOption.AllDirectories);
-                    if (found.Length > 0) return found[0];
+                    foreach (string p in found) if (AriaOk(p)) return p;
                 }
             }
             catch { }
@@ -1266,7 +1334,7 @@ namespace LocModelDownloader
             {
                 if (d.Trim().Length == 0) continue;
                 string p = Path.Combine(d.Trim(), "aria2c.exe");
-                if (File.Exists(p)) return p;
+                if (AriaOk(p)) return p;
             }
 
             string[] fixedPaths =
@@ -1275,7 +1343,7 @@ namespace LocModelDownloader
                 @"C:\Program Files (x86)\aria2\aria2c.exe",
                 @"D:\ProgramData\tools\aria2\aria2c.exe"
             };
-            foreach (string p in fixedPaths) if (File.Exists(p)) return p;
+            foreach (string p in fixedPaths) if (AriaOk(p)) return p;
             return null;
         }
 
@@ -1296,8 +1364,12 @@ namespace LocModelDownloader
         }
 
         // 从 aria2 官方发布包下载并校验后安装到数据目录；返回 aria2c.exe 路径
-        public static string InstallAria2(Action<string> log)
+        public static string InstallAria2(Action<string> log, Func<bool> canceled = null)
         {
+            Action checkCancel = delegate
+            {
+                if (canceled != null && canceled()) throw new Exception("已取消安装 aria2。");
+            };
             string dir = AriaInstallDir();
             if (dir == null) throw new Exception("找不到可写的数据目录，无法自动安装。");
             Directory.CreateDirectory(dir);
@@ -1320,6 +1392,7 @@ namespace LocModelDownloader
             string tmpExe = Path.Combine(tmpDir, "aria2c.exe");
             try
             {
+                checkCancel();
                 if (log != null) log("正在下载 aria2 " + Aria2Version + "（约 2.4 MB）…");
                 try
                 {
@@ -1349,6 +1422,7 @@ namespace LocModelDownloader
                                         "\r\n可手动下载：" + Aria2Url);
                 }
 
+                checkCancel();
                 if (log != null) log("下载完成，正在解压并校验…");
                 bool found = false;
                 using (ZipArchive za = ZipFile.OpenRead(tmpZip))
@@ -1367,8 +1441,21 @@ namespace LocModelDownloader
                 if (!string.Equals(h, Aria2Sha256, StringComparison.OrdinalIgnoreCase))
                     throw new Exception("aria2c.exe 校验失败（哈希不符），已中止安装。\r\n实际：" + h);
 
-                try { if (File.Exists(exe)) File.Delete(exe); } catch { }
-                File.Copy(tmpExe, exe, true);
+                checkCancel();
+                // 先拷到同目录 .new，再原子替换，避免留下半截 exe
+                string newExe = exe + ".new";
+                try { if (File.Exists(newExe)) File.Delete(newExe); } catch { }
+                File.Copy(tmpExe, newExe, true);
+                if (File.Exists(exe))
+                {
+                    try { File.Replace(newExe, exe, null); }
+                    catch
+                    {
+                        try { File.Delete(exe); } catch { }
+                        File.Move(newExe, exe);
+                    }
+                }
+                else File.Move(newExe, exe);
                 if (log != null) log("已安装：" + exe);
                 Log("自动安装 aria2 完成: " + exe);
                 return exe;
@@ -1405,7 +1492,40 @@ namespace LocModelDownloader
             }
         }
 
+        static bool IsTransient(WebException we)
+        {
+            if (we.Status == WebExceptionStatus.Timeout ||
+                we.Status == WebExceptionStatus.ConnectFailure ||
+                we.Status == WebExceptionStatus.ReceiveFailure ||
+                we.Status == WebExceptionStatus.SendFailure) return true;
+            try
+            {
+                HttpWebResponse hr = we.Response as HttpWebResponse;
+                if (hr == null) return false;
+                int code = (int)hr.StatusCode;
+                return code == 408 || code == 429 || code >= 500;
+            }
+            catch { return false; }
+        }
+
         public static List<FileEntry> FetchFiles(Source src, string mirror, string repo)
+        {
+            int attempts = 0;
+            while (true)
+            {
+                attempts++;
+                try { return FetchFilesOnce(src, mirror, repo); }
+                catch (AuthNeeded) { throw; }
+                catch (WebException we)
+                {
+                    // 网络抖动/镜像 5xx 自动重试两次，别让用户手动再点
+                    if (attempts >= 3 || !IsTransient(we)) throw;
+                    System.Threading.Thread.Sleep(700 * attempts);
+                }
+            }
+        }
+
+        static List<FileEntry> FetchFilesOnce(Source src, string mirror, string repo)
         {
             List<FileEntry> list;
             if (src == Source.MS) list = FetchModelScope(repo);
@@ -3198,12 +3318,15 @@ namespace LocModelDownloader
     class AriaInstallForm : Form
     {
         Label lbl;
+        Button btnCancel;
         public string Error;
+        public bool Canceled;
+        bool finished;
 
         public AriaInstallForm()
         {
             Text = "自动安装 aria2";
-            Width = 500; Height = 150;
+            Width = 500; Height = 180;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false; MinimizeBox = false; ControlBox = false;
@@ -3211,9 +3334,15 @@ namespace LocModelDownloader
             Core.ApplyIcon(this);
 
             lbl = new Label();
-            lbl.SetBounds(16, 26, 450, 44);
+            lbl.SetBounds(16, 20, 450, 60);
             lbl.Text = "正在准备…";
             Controls.Add(lbl);
+
+            btnCancel = new Button();
+            btnCancel.Text = "取消";
+            btnCancel.SetBounds(376, 96, 90, 28);
+            btnCancel.Click += delegate { Canceled = true; Close(); };
+            Controls.Add(btnCancel);
         }
 
         protected override void OnShown(EventArgs e)
@@ -3226,14 +3355,33 @@ namespace LocModelDownloader
                     Core.InstallAria2(delegate (string s)
                     {
                         try { BeginInvoke(new Action(delegate { lbl.Text = s; })); } catch { }
-                    });
+                    }, delegate { return Canceled; });
                 }
                 catch (Exception ex) { Error = ex.Message; }
             });
             t.ContinueWith(delegate
             {
-                try { BeginInvoke(new Action(delegate { Close(); })); } catch { }
+                try
+                {
+                    BeginInvoke(new Action(delegate
+                    {
+                        finished = true;
+                        Close();
+                    }));
+                }
+                catch { }
             });
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            // 安装没结束就关窗，等于后台还在装：只允许点「取消」退出
+            if (!finished && !Canceled)
+            {
+                e.Cancel = true;
+                return;
+            }
+            base.OnFormClosing(e);
         }
     }
 
@@ -3337,7 +3485,19 @@ namespace LocModelDownloader
                 StringBuilder pf = new StringBuilder();
                 if (psrc == Source.Civitai)
                 {
-                    pf.AppendLine("cv:" + prepo);
+                    // 勾了具体文件就按文件排；没勾才排整个版本
+                    int n = 0;
+                    foreach (object o in clb.CheckedItems)
+                    {
+                        Core.FileEntry fe = o as Core.FileEntry;
+                        if (fe == null) continue;
+                        string vid = prepo;
+                        if (!string.IsNullOrEmpty(fe.Repo) && fe.Repo.StartsWith("civitai-", StringComparison.OrdinalIgnoreCase))
+                            vid = fe.Repo.Substring("civitai-".Length);
+                        pf.AppendLine("cv:" + vid + " :: " + fe.Name);
+                        n++;
+                    }
+                    if (n == 0) pf.AppendLine("cv:" + prepo);
                 }
                 else
                 {
@@ -3654,28 +3814,41 @@ namespace LocModelDownloader
 
         // 下载期间统一锁住会互相干扰的按钮（队列/校验/目录/配方/接管）
         // 下载期统一锁按钮的辅助方法之后放 aria2 检查
+        static readonly object ariaGate = new object();
+        static bool ariaInstalling;
+
         bool EnsureAria2()
         {
             if (Core.FindAria() != null) return true;
 
-            DialogResult r = MessageBox.Show(this,
-                "没有找到下载引擎 aria2c.exe。\r\n\r\n" +
-                "要现在自动下载安装吗？约 2.4 MB，来自 aria2 官方 GitHub 发布包，装好后会校验 SHA256。\r\n\r\n" +
-                "点「否」跳过：你也可以自己把 aria2c.exe 放到程序目录（或系统 PATH）后重启本工具。",
-                "缺少下载引擎", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-
-            if (r != DialogResult.Yes)
+            lock (ariaGate)
             {
-                if (r == DialogResult.No)
-                    lblStatus.Text = "未安装 aria2：把 aria2c.exe 放到程序目录后重启本工具";
-                return false;
+                if (ariaInstalling) return false;   // 已经有一个安装在进行，别起第二个
+                ariaInstalling = true;
             }
-
             try
             {
+                DialogResult r = MessageBox.Show(this,
+                    "没有找到下载引擎 aria2c.exe。\r\n\r\n" +
+                    "要现在自动下载安装吗？约 2.4 MB，来自 aria2 官方 GitHub 发布包，装好后会校验 SHA256。\r\n\r\n" +
+                    "点「否」跳过：你也可以自己把 aria2c.exe 放到程序目录（或系统 PATH）后重启本工具。",
+                    "缺少下载引擎", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+
+                if (r != DialogResult.Yes)
+                {
+                    if (r == DialogResult.No)
+                        lblStatus.Text = "未安装 aria2：把 aria2c.exe 放到程序目录后重启本工具";
+                    return false;
+                }
+
                 using (AriaInstallForm f = new AriaInstallForm())
                 {
                     f.ShowDialog(this);
+                    if (f.Canceled)
+                    {
+                        lblStatus.Text = "已取消安装 aria2（仍可手动放 aria2c.exe）";
+                        return false;
+                    }
                     if (!string.IsNullOrEmpty(f.Error)) throw new Exception(f.Error);
                 }
                 string p = Core.FindAria();
@@ -3693,6 +3866,10 @@ namespace LocModelDownloader
                     "\r\n\r\n可以手动下载：\r\n" + Core.Aria2Url + "\r\n解压后把 aria2c.exe 放到程序目录。",
                     "安装失败");
                 return false;
+            }
+            finally
+            {
+                lock (ariaGate) { ariaInstalling = false; }
             }
         }
 
@@ -3903,7 +4080,7 @@ namespace LocModelDownloader
             // 先剥掉 ms:/cv:/hf: 前缀，再判断是不是 URL
             string probe = raw;
             if (probe.StartsWith("ms:", StringComparison.OrdinalIgnoreCase)) probe = probe.Substring(3).Trim();
-            else if (probe.StartsWith("cv:", StringComparison.OrdinalIgnoreCase)) probe = probe.Substring(4).Trim();
+            else if (probe.StartsWith("cv:", StringComparison.OrdinalIgnoreCase)) probe = probe.Substring(3).Trim();
             else if (probe.StartsWith("hf:", StringComparison.OrdinalIgnoreCase)) probe = probe.Substring(3).Trim();
             bool isUrl = probe.StartsWith("http", StringComparison.OrdinalIgnoreCase);
             Source det;
@@ -4328,9 +4505,17 @@ namespace LocModelDownloader
                     return 3;
                 }
                 List<Core.JobItem> q = Core.LoadQueue();
+                string a1 = args[1];
+                string a2 = args.Length > 2 ? args[2] : null;
+                int sep = a1.IndexOf("::");       // 也允许 "repo :: file" 写在一个参数里
+                if (sep > 0 && a2 == null)
+                {
+                    a2 = a1.Substring(sep + 2).Trim();
+                    a1 = a1.Substring(0, sep).Trim();
+                }
                 Source asrc; string arepo; string ahint;
-                Core.ParseRepoInput(args[1], Source.HF, out asrc, out arepo, out ahint);
-                string onlyFile = args.Length > 2 ? args[2] : (ahint ?? "");
+                Core.ParseRepoInput(a1, Source.HF, out asrc, out arepo, out ahint);
+                string onlyFile = a2 ?? (ahint ?? "");
                 Core.JobItem job = Core.ResolveRepoJob(asrc, Core.DefaultMirror, arepo, onlyFile,
                     Core.DetectModelsDir());
                 if (job.Files.Count == 0) { Console.WriteLine("解析失败"); return 1; }
