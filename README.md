@@ -75,6 +75,12 @@ screenshots/            界面截图
 - HuggingFace 只有大文件（LFS）提供 sha256，小配置文件只能比大小
 - 下载时令牌会出现在 aria2 的命令行参数里，同机其他进程理论上可见（单用户机器风险低）
 
+## 问题反馈
+
+有 bug 或建议请开 Issue：<https://github.com/dsAI-Q/locmodel-downloader/issues>
+
+已知待修项（都在 Issues 里）：网络请求无重试、令牌经 aria2 命令行可见、校验按文件名匹配的同名歧义、长路径、高 DPI 模糊、目录选择校验、预检只查 12 个链接、自检不覆盖真实下载、站内搜索。
+
 ## 致谢
 
 - [aria2](https://github.com/aria2/aria2)：GPLv2+，本工具仅通过命令行调用，未修改其源码，许可见 `LICENSE-aria2.txt`
