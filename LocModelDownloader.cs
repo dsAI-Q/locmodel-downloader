@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -17,8 +17,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.5.0")]
-[assembly: AssemblyFileVersion("1.1.5.0")]
+[assembly: AssemblyVersion("1.1.6.0")]
+[assembly: AssemblyFileVersion("1.1.6.0")]
 
 namespace LocModelDownloader
 {
@@ -2276,7 +2276,7 @@ namespace LocModelDownloader
                 Secrets.Civitai = txtCv.Text.Trim();
                 if (!Secrets.Save())
                 {
-                    MessageBox.Show("令牌保存失败：数据目录不可写。\r\n（便携版请确认程序目录可写）", "保存失败",
+                    MessageBox.Show(this, "令牌保存失败：数据目录不可写。\r\n（便携版请确认程序目录可写）", "保存失败",
                         MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;   // 保存失败就不关窗，别让调用方以为已经存好了
                 }
@@ -2341,7 +2341,7 @@ namespace LocModelDownloader
                     Core.LoadRecipes();
                     Process.Start("notepad.exe", "\"" + Core.RecipeFile() + "\"");
                 }
-                catch (Exception ex) { MessageBox.Show("打不开配方文件：" + ex.Message, "提示"); }
+                catch (Exception ex) { MessageBox.Show(this, "打不开配方文件：" + ex.Message, "提示"); }
             };
             btnClose = new Button(); btnClose.Text = "关闭"; btnClose.SetBounds(520, 160, 110, 30);
             btnClose.Click += delegate { Close(); };
@@ -2415,13 +2415,13 @@ namespace LocModelDownloader
                 foreach (string b in bad) mb.AppendLine("- " + b);
                 mb.AppendLine();
                 mb.Append("已中止下载。");
-                MessageBox.Show(mb.ToString(), "配方检查失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, mb.ToString(), "配方检查失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
             StringBuilder names = new StringBuilder();
             foreach (Core.Component c in items) names.Append("  - ").Append(c.SaveAs).Append("\r\n");
-            if (MessageBox.Show("将下载以下文件到：\r\n" + Core.RecipeFolder(modelsDir, r.Id) + "\r\n\r\n" + names,
+            if (MessageBox.Show(this, "将下载以下文件到：\r\n" + Core.RecipeFolder(modelsDir, r.Id) + "\r\n\r\n" + names,
                 "确认", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
 
             ResultJob = Core.BuildRecipeJob(r, qi, modelsDir);
@@ -2492,7 +2492,7 @@ namespace LocModelDownloader
             }
             catch (Exception ex)
             {
-                MessageBox.Show("打不开目录：\r\n" + dir + "\r\n\r\n" + ex.Message, "提示");
+                MessageBox.Show(this, "打不开目录：\r\n" + dir + "\r\n\r\n" + ex.Message, "提示");
             }
         }
     }
@@ -2557,7 +2557,7 @@ namespace LocModelDownloader
             btnClose = new Button(); btnClose.Text = "关闭"; btnClose.SetBounds(632, 358, 100, 28);
             btnClose.Click += delegate
             {
-                if (running) { MessageBox.Show("请先点「暂停全部」，再关闭。", "提示"); return; }
+                if (running) { MessageBox.Show(this, "请先点「暂停全部」，再关闭。", "提示"); return; }
                 Close();
             };
 
@@ -2677,10 +2677,10 @@ namespace LocModelDownloader
         void SkipSelected()
         {
             int i = lst.SelectedIndex;
-            if (i < 0 || i >= jobs.Count) { MessageBox.Show("先在列表里选一项。", "提示"); return; }
+            if (i < 0 || i >= jobs.Count) { MessageBox.Show(this, "先在列表里选一项。", "提示"); return; }
             Core.JobItem j = jobs[i];
             if (j == current && running) { skipFlag = true; lblStatus.Text = "正在取消当前项…"; return; }
-            if (j.Status == "done") { MessageBox.Show("这项已经下完了。", "提示"); return; }
+            if (j.Status == "done") { MessageBox.Show(this, "这项已经下完了。", "提示"); return; }
             j.Status = "cancelled";
             RefreshList();
         }
@@ -2690,7 +2690,7 @@ namespace LocModelDownloader
             int i = lst.SelectedIndex;
             if (i < 0 || i >= jobs.Count) return;
             Core.JobItem j = jobs[i];
-            if (j == current && running) { MessageBox.Show("正在下载，先取消它再移除。", "提示"); return; }
+            if (j == current && running) { MessageBox.Show(this, "正在下载，先取消它再移除。", "提示"); return; }
             jobs.RemoveAt(i);
             RefreshList();
         }
@@ -2701,7 +2701,7 @@ namespace LocModelDownloader
             List<Core.JobItem> todo = new List<Core.JobItem>();
             foreach (Core.JobItem j in jobs)
                 if (j.Status != "done" && j.Status != "cancelled") todo.Add(j);
-            if (todo.Count == 0) { MessageBox.Show("没有待下载的任务。", "提示"); return; }
+            if (todo.Count == 0) { MessageBox.Show(this, "没有待下载的任务。", "提示"); return; }
 
             long total = 0;
             foreach (Core.JobItem j in todo) total += j.TotalSize;
@@ -2715,11 +2715,11 @@ namespace LocModelDownloader
             if (free >= 0) sb.AppendLine("磁盘剩余：" + Core.Fmt(free) + "（" + Path.GetPathRoot(Path.GetFullPath(modelsDir)) + "）");
             if (free >= 0 && free < total)
             {
-                MessageBox.Show("磁盘空间不足，已中止。\r\n\r\n需要：" + Core.Fmt(total) + "\r\n剩余：" + Core.Fmt(free),
+                MessageBox.Show(this, "磁盘空间不足，已中止。\r\n\r\n需要：" + Core.Fmt(total) + "\r\n剩余：" + Core.Fmt(free),
                     "空间不足", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
-            if (MessageBox.Show(sb.ToString() + "\r\n确认开始下载吗？", "批量下载确认", MessageBoxButtons.OKCancel,
+            if (MessageBox.Show(this, sb.ToString() + "\r\n确认开始下载吗？", "批量下载确认", MessageBoxButtons.OKCancel,
                 MessageBoxIcon.Information) != DialogResult.OK) return;
 
             running = true; pauseFlag = false; skipFlag = false;
@@ -2793,13 +2793,13 @@ namespace LocModelDownloader
             if (running)
             {
                 e.Cancel = true;
-                MessageBox.Show("正在下载，先点「暂停全部」再关闭。", "提示");
+                MessageBox.Show(this, "正在下载，先点「暂停全部」再关闭。", "提示");
                 return;
             }
             if (parsing)
             {
                 e.Cancel = true;
-                MessageBox.Show("正在解析仓库（联网查文件列表），等它结束再关闭。", "提示");
+                MessageBox.Show(this, "正在解析仓库（联网查文件列表），等它结束再关闭。", "提示");
                 return;
             }
             base.OnFormClosing(e);
@@ -2880,7 +2880,7 @@ namespace LocModelDownloader
             btnClose = new Button(); btnClose.Text = "关闭"; btnClose.SetBounds(642, 250, 100, 30);
             btnClose.Click += delegate
             {
-                if (busy) { MessageBox.Show("正在校验，等它结束再关。", "提示"); return; }
+                if (busy) { MessageBox.Show(this, "正在校验，等它结束再关。", "提示"); return; }
                 Close();
             };
 
@@ -2929,7 +2929,7 @@ namespace LocModelDownloader
             }
             RefreshFiles();
             if (dirs > 0)
-                MessageBox.Show("拖进来的是文件夹（" + dirs + " 个），请拖具体文件。", "提示");
+                MessageBox.Show(this, "拖进来的是文件夹（" + dirs + " 个），请拖具体文件。", "提示");
         }
 
         void RefreshFiles()
@@ -2950,7 +2950,7 @@ namespace LocModelDownloader
         async void Go()
         {
             if (busy) return;
-            if (picked.Count == 0) { MessageBox.Show("先选文件（或把文件拖进窗口）。", "提示"); return; }
+            if (picked.Count == 0) { MessageBox.Show(this, "先选文件（或把文件拖进窗口）。", "提示"); return; }
 
             Source src = cboSource.SelectedIndex == 2 ? Source.Civitai :
                          (cboSource.SelectedIndex == 1 ? Source.MS : Source.HF);
@@ -3074,7 +3074,7 @@ namespace LocModelDownloader
             if (busy)
             {
                 e.Cancel = true;
-                MessageBox.Show("正在校验（算哈希），等它结束再关。", "提示");
+                MessageBox.Show(this, "正在校验（算哈希），等它结束再关。", "提示");
                 return;
             }
             base.OnFormClosing(e);
@@ -3146,7 +3146,7 @@ namespace LocModelDownloader
             Button btnRepoView = new Button(); btnRepoView.Text = "查看仓库"; btnRepoView.SetBounds(648, 88, 110, 26);            btnRepoView.Click += delegate
             {
                 string repo = Core.NormRepo(txtRepo.Text);
-                if (repo.Length < 3) { MessageBox.Show("先填仓库名。", "提示"); return; }
+                if (repo.Length < 3) { MessageBox.Show(this, "先填仓库名。", "提示"); return; }
                 try
                 {
                     if (Src == Source.Civitai) Process.Start("https://civitai.com/");
@@ -3346,11 +3346,11 @@ namespace LocModelDownloader
             foreach (Core.RecipeIssue s in issues) if (s.Message.IndexOf("位置不对", StringComparison.Ordinal) >= 0) misplaced = true;
             if (misplaced)
             {
-                if (MessageBox.Show("检测到配套文件放错位置（LocModel 要求放在 image\\common）。\r\n（请先退出 LocModel 再整理，避免文件被占用）\r\n\r\n要自动移动到正确位置吗？",
+                if (MessageBox.Show(this, "检测到配套文件放错位置（LocModel 要求放在 image\\common）。\r\n（请先退出 LocModel 再整理，避免文件被占用）\r\n\r\n要自动移动到正确位置吗？",
                     "整理配套文件", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
                 {
                     int moved = Core.FixMisplaced(modelsDir, LogUi);
-                    MessageBox.Show("已移动 " + moved + " 个文件。\r\n请重启 LocModel 后查看。", "完成");
+                    MessageBox.Show(this, "已移动 " + moved + " 个文件。\r\n请重启 LocModel 后查看。", "完成");
                     issues = Core.RecipeIssuesDetailed(modelsDir);
                 }
             }
@@ -3363,7 +3363,7 @@ namespace LocModelDownloader
                 foreach (Core.RecipeIssue s in issues) sb.AppendLine("- " + s.Message);
                 sb.AppendLine();
                 sb.Append("要打开「图片/视频配方下载」补齐吗？\r\n（已存在的文件会自动跳过；未下完的 .part 会被重新下载）\r\n（下载前请先在 LocModel 里暂停同名任务）");
-                if (MessageBox.Show(sb.ToString(), "模型不完整", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                if (MessageBox.Show(this, sb.ToString(), "模型不完整", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                 {
                     OpenRecipe(issues[0].Id);
                 }
@@ -3373,7 +3373,7 @@ namespace LocModelDownloader
             int left = 0;
             foreach (Core.JobItem j in q) if (j.Status != "done" && j.Status != "cancelled") left++;
             if (left == 0) return;
-            if (MessageBox.Show("上次还有 " + left + " 个任务没下完（断点已保存）。\r\n要打开队列继续吗？", "继续上次下载",
+            if (MessageBox.Show(this, "上次还有 " + left + " 个任务没下完（断点已保存）。\r\n要打开队列继续吗？", "继续上次下载",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
             {
                 QueueForm qf = new QueueForm(modelsDir, EffectiveHfMirror, "");
@@ -3385,7 +3385,7 @@ namespace LocModelDownloader
         {
             if (busy)
             {
-                if (MessageBox.Show("正在下载。退出会中断下载（.aria2 断点会保留，下次可续传）。\r\n确定退出吗？",
+                if (MessageBox.Show(this, "正在下载。退出会中断下载（.aria2 断点会保留，下次可续传）。\r\n确定退出吗？",
                     "确认退出", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                 {
                     e.Cancel = true;
@@ -3514,11 +3514,11 @@ namespace LocModelDownloader
             btnTakeover.Enabled = false;
             List<Core.Partial> ps = new List<Core.Partial>();
             try { ps = await Task.Run(() => Core.ScanPartials(modelsDir)); }
-            catch (Exception ex) { MessageBox.Show("扫描失败：" + ex.Message, "错误"); btnTakeover.Enabled = true; return; }
+            catch (Exception ex) { MessageBox.Show(this, "扫描失败：" + ex.Message, "错误"); btnTakeover.Enabled = true; return; }
 
             if (ps.Count == 0)
             {
-                MessageBox.Show("没发现未完成的下载（.part）。\r\n先在 LocModel 里点下载，再回来点这里。", "提示");
+                MessageBox.Show(this, "没发现未完成的下载（.part）。\r\n先在 LocModel 里点下载，再回来点这里。", "提示");
                 btnTakeover.Enabled = true;
                 return;
             }
@@ -3529,7 +3529,7 @@ namespace LocModelDownloader
             foreach (Core.Partial p in ps) sb.AppendLine("  - " + p.FileName + "    [" + p.SourceNote + "]");
             sb.AppendLine();
             sb.Append("请先在 LocModel 里暂停这些下载，然后点确定：我会删掉 .part 并用 aria2 从镜像接管。继续吗？");
-            if (MessageBox.Show(sb.ToString(), "接管下载", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
+            if (MessageBox.Show(this, sb.ToString(), "接管下载", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
             {
                 btnTakeover.Enabled = true;
                 return;
@@ -3562,7 +3562,7 @@ namespace LocModelDownloader
                 catch (Exception ex) { fail++; LogUi("=== 异常：" + ex.Message); }
             }
             SetBusyUi(false);
-            if (!IsDisposed) MessageBox.Show("接管结束：成功 " + ok + "，失败 " + fail, "完成");
+            if (!IsDisposed) MessageBox.Show(this, "接管结束：成功 " + ok + "，失败 " + fail, "完成");
         }
 
         void OpenRecipe(string selectId)
@@ -3621,7 +3621,7 @@ namespace LocModelDownloader
             long free = Core.FreeSpace(modelsDir);
             if (need > 0 && free >= 0 && free < need)
             {
-                MessageBox.Show("磁盘空间不足，已中止。\r\n\r\n需要：" + Core.Fmt(need) + "\r\n剩余：" + Core.Fmt(free),
+                MessageBox.Show(this, "磁盘空间不足，已中止。\r\n\r\n需要：" + Core.Fmt(need) + "\r\n剩余：" + Core.Fmt(free),
                     "空间不足", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 lblStatus.Text = "已取消（空间不足）";
                 return;
@@ -3661,7 +3661,7 @@ namespace LocModelDownloader
                 if (s.StartsWith(title)) extra += "\r\n- " + s;
             lblStatus.Text = "配方下载结束：成功 " + ok + "，失败 " + fail;
             if (!IsDisposed)
-                MessageBox.Show("配方下载结束：成功 " + ok + "，失败 " + fail +
+                MessageBox.Show(this, "配方下载结束：成功 " + ok + "，失败 " + fail +
                     (extra.Length > 0 ? "\r\n\r\n仍不完整：" + extra : "\r\n\r\n三件套已齐全（主体在配方目录，编码器/VAE 在 image\\common）") +
                     "\r\n\r\n请重启 LocModel 后查看。", "完成");
         }
@@ -3684,7 +3684,7 @@ namespace LocModelDownloader
                                  "当前填的是：" + repo + "\r\n\r\n" +
                                  "要先填 " + who + " 令牌再试一次吗？\r\n" +
                                  "（不确定就点「否」，先检查仓库名拼写或换个来源）";
-                    if (MessageBox.Show(msg, "访问被拒绝", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) throw;
+                    if (MessageBox.Show(this, msg, "访问被拒绝", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) throw;
                     using (TokenForm tf = new TokenForm())
                     {
                         if (tf.ShowDialog(this) != DialogResult.OK) throw;
@@ -3706,7 +3706,7 @@ namespace LocModelDownloader
             Source det;
             if (isUrl && !Core.TryDetectSource(probe, out det))
             {
-                MessageBox.Show("这个链接不是 HuggingFace / 魔塔 / C站 的地址，工具只支持这三站。\r\n\r\n" + probe, "不支持的网站");
+                MessageBox.Show(this, "这个链接不是 HuggingFace / 魔塔 / C站 的地址，工具只支持这三站。\r\n\r\n" + probe, "不支持的网站");
                 return;
             }
 
@@ -3733,16 +3733,16 @@ namespace LocModelDownloader
                           "  Qwen/Qwen2.5-7B-Instruct-GGUF\r\n\r\n" +
                           "如果你只有文件名：先去站点找到它所在的仓库，再复制仓库地址；\r\n" +
                           "如果这个文件来自 C站，把来源切到 Civitai，填模型版本 ID 或模型页链接。";
-                MessageBox.Show(tip, "这不是仓库名");
+                MessageBox.Show(this, tip, "这不是仓库名");
                 return;
             }
             if (src == Source.Civitai)
             {
-                if (repo.Length < 2) { MessageBox.Show("Civitai 请填模型版本 ID 或模型页面链接。", "提示"); return; }
+                if (repo.Length < 2) { MessageBox.Show(this, "Civitai 请填模型版本 ID 或模型页面链接。", "提示"); return; }
             }
             else if (repo.Length < 3 || repo.IndexOf('/') < 1)
             {
-                MessageBox.Show("请填写 owner/仓库名，例如：mradermacher/Model-NAME-GGUF", "提示");
+                MessageBox.Show(this, "请填写 owner/仓库名，例如：mradermacher/Model-NAME-GGUF", "提示");
                 return;
             }
             btnList.Enabled = false;
@@ -3761,7 +3761,7 @@ namespace LocModelDownloader
                 string key = (list.Count > 0 && !string.IsNullOrEmpty(list[0].Repo)) ? list[0].Repo : repo;
                 lblTarget.Text = "保存到：" + Path.Combine(modelsDir, Core.FolderFor(key));
                 lblStatus.Text = "共 " + list.Count + " 个文件";
-                if (list.Count == 0) MessageBox.Show("仓库里没有文件，或仓库名不对。", "提示");
+                if (list.Count == 0) MessageBox.Show(this, "仓库里没有文件，或仓库名不对。", "提示");
 
                 // 如果粘的是「文件页」链接，自动勾中那个文件
                 string wantFile = fileHint;
@@ -3788,7 +3788,7 @@ namespace LocModelDownloader
             {
                 ignoreChecks = false;
                 lblStatus.Text = "获取失败";
-                MessageBox.Show("获取文件列表失败：\r\n" + ex.Message, "错误");
+                MessageBox.Show(this, "获取文件列表失败：\r\n" + ex.Message, "错误");
             }
             finally { btnList.Enabled = true; }
         }
@@ -3796,7 +3796,7 @@ namespace LocModelDownloader
         async void StartDownload()
         {
             if (busy) return;
-            if (clb.CheckedItems.Count == 0) { MessageBox.Show("请先勾选要下载的文件。", "提示"); return; }
+            if (clb.CheckedItems.Count == 0) { MessageBox.Show(this, "请先勾选要下载的文件。", "提示"); return; }
 
             Source src = Src;
             string repo = (src == Source.Civitai) ? txtRepo.Text.Trim() : Core.NormRepo(txtRepo.Text);
@@ -3822,7 +3822,7 @@ namespace LocModelDownloader
                 foreach (string w in warns) sb.AppendLine("- " + w);
                 sb.AppendLine();
                 sb.Append("仍要继续下载吗？");
-                if (MessageBox.Show(sb.ToString(), "下载前检查", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK)
+                if (MessageBox.Show(this, sb.ToString(), "下载前检查", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK)
                 {
                     lblStatus.Text = "已取消（下载前检查未通过）";
                     return;
@@ -3832,11 +3832,11 @@ namespace LocModelDownloader
             long freeSpace = Core.FreeSpace(modelsDir);
             if (freeSpace >= 0 && freeSpace < total)
             {
-                MessageBox.Show("磁盘空间不足，已中止。\r\n\r\n需要：" + Core.Fmt(total) + "\r\n剩余：" + Core.Fmt(freeSpace),
+                MessageBox.Show(this, "磁盘空间不足，已中止。\r\n\r\n需要：" + Core.Fmt(total) + "\r\n剩余：" + Core.Fmt(freeSpace),
                     "空间不足", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
-            if (MessageBox.Show("将下载 " + chosen.Count + " 个文件，共 " + Core.Fmt(total) +
+            if (MessageBox.Show(this, "将下载 " + chosen.Count + " 个文件，共 " + Core.Fmt(total) +
                 (freeSpace >= 0 ? "\r\n磁盘剩余：" + Core.Fmt(freeSpace) : "") + "\r\n\r\n确定开始？", "确认",
                 MessageBoxButtons.OKCancel) != DialogResult.OK) return;
 
@@ -3875,7 +3875,7 @@ namespace LocModelDownloader
             SetBusyUi(false);
             lblStatus.Text = "结束：成功 " + ok + "，失败 " + fail + (cancelFlag ? "，已取消" : "");
             if (ok > 0 && !IsDisposed)
-                MessageBox.Show("下载完成。\r\n请重启 LocModel，模型会自动出现在列表里。\r\n\r\n保存位置：\r\n" + dir, "完成");
+                MessageBox.Show(this, "下载完成。\r\n请重启 LocModel，模型会自动出现在列表里。\r\n\r\n保存位置：\r\n" + dir, "完成");
         }
     }
 
@@ -4300,3 +4300,4 @@ namespace LocModelDownloader
         }
     }
 }
+
