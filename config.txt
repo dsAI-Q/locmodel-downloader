@@ -1,0 +1,17 @@
+# 可调参数（改完保存，下次启动生效）
+#
+# connections = aria2 并发连接数，1-64，默认 16
+#   网络差或服务器限连接时可降到 8；线路好可升到 32。
+connections=16
+#
+# verify = 下载后校验强度，off / size / hash，默认 size
+#   off  不校验（最快，但坏文件也会留着）
+#   size 只比大小（毫秒级，能抓住截断和错误页）
+#   hash 大小 + sha256（最严格；大文件算哈希要读一遍盘，20 GB 约 1-2 分钟）
+#   注：HF 只有大文件(LFS)提供 sha256，小配置文件只能比大小
+# verify=size
+#
+# proxy = 代理地址（可选）。填了以后 aria2 和列表请求都走这个代理。
+#   例：proxy=http://127.0.0.1:7890
+#   如果你的代理是 TUN/全局模式（如 FlClash 的 Meta Tunnel），留空即可。
+# proxy=

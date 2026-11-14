@@ -1,0 +1,93 @@
+LocModel 模型下载器（便携版）
+================================
+
+用法
+----
+1. 双击「LocModel模型下载器.exe」。
+   若出现「Windows 已保护你的电脑」，点「更多信息」->「仍要运行」。
+2. 来源选 HuggingFace / ModelScope / Civitai，填仓库名或版本 ID，点「获取文件列表」。
+   也可以直接粘贴网页链接，工具只认「哪个仓库/哪个版本」：
+     HuggingFace  仓库页、/tree/main 页、/blob/main/文件名 页都行
+     ModelScope   仓库页、文件列表页都行
+     Civitai      模型版本 ID、模型主页链接（自动取该模型最新公开版本）、带 modelVersionId 的链接
+   注意：粘单个文件的网页链接，列出的是整个仓库，仍需自己勾选要下的文件。
+3. 勾选文件后点「开始下载」。勾选 .gguf 时会自动带上 mmproj / 分片。
+4. 图片/视频模型：点「图片/视频配方下载」，选模型和量化，三件套一次下齐。
+5. 想把 LocModel 里正在下载的任务交给它：先在 LocModel 里暂停，再点「接管正在下载的」。
+6. 批量下载：点右上「批量队列」，按下面几种写法添加任务（三种来源可以混在一个队列里）：
+
+     owner/repo                  HuggingFace，自动选一个量化（优先 Q8_0）并带上 mmproj
+     ms:owner/repo               魔塔 ModelScope，同上
+     cv:版本ID                    C站 Civitai，下载该版本的全部文件
+     owner/repo :: 文件名        指定某个文件（ms: 前缀同样可用）
+     recipe:z-image-turbo Q8_0   整条图片/视频配方
+
+   同一来源、同一仓库（同配方同量化）重复添加会自动跳过，不会排两遍。
+   点「开始 / 继续」会先汇总总量和磁盘剩余空间给你确认；空间不够会直接拦下。
+   下载中可「暂停全部」（保留 .aria2 断点）或「取消选中项」。
+   关闭工具再打开，队列会保留，并提示你继续上次没下完的任务，断点续传。
+   如果上次是被强制关闭/断电，列表里原来「下载中」的任务会显示「已暂停」，点「开始 / 继续」接着下。
+
+校验文件
+--------
+- 主界面右上「校验文件」：把模型文件拖进窗口（或点「选择文件」），
+  填上它来自哪个仓库 / 版本 ID（可留空），点「开始校验」。
+  · 填了仓库：跟站点给的 sha256 + 大小比对，结果写「一致 / 不一致 / 仓库里没这个名字」
+  · 留空：只算大小和 sha256，不联网（自己拿去比对）
+  · HuggingFace 只有大文件（LFS）才给 sha256，小的配置文件只能比大小
+- 下载时会自动校验：默认只比大小（很快）；config.txt 里写 verify=hash 会额外算 sha256。
+  校验不通过的文件会被删掉并在日志里说明，避免留下一个「看起来下完了」的坏文件。
+
+目录说明
+--------
+- aria2c.exe          内置下载引擎，别删，也别改名
+- 自检.exe            排障用（--doctor / --findmodels / --queue）
+- LocModel模型下载器.exe  主程序
+- data\               首次运行后自动生成：配方表 recipes.json、队列 queue.json、
+                      令牌 secrets.bin、模型目录缓存。配方可在「图片/视频配方下载」窗口里
+                      点「编辑配方文件」直接改。
+
+运行前提
+--------
+- 64 位 Windows 10 / 11（需要 .NET Framework 4.x，系统自带；aria2c 为 x64）
+- 能访问 hf-mirror.net（国内可直连）；Civitai 需要能访问 civitai.com 的网络
+- 不需要管理员权限，同一时间只允许开一个实例
+
+可调参数
+--------
+- config.txt 里 connections=16 可改并发连接数（1-64），改完下次启动生效
+- config.txt 里 verify=size 控制下载后校验：off 不校验 / size 只比大小（默认）/ hash 大小+sha256
+  （sha256 读盘较慢，20 GB 大概一两分钟；想要最严格就用 hash）
+- config.txt 里 proxy=http://127.0.0.1:7890 可指定代理（aria2 和列表请求都走它；
+  用 TUN/全局模式代理时留空即可）
+- 也可以用环境变量 LOCMODEL_DL_CONNECTIONS 临时覆盖连接数
+
+许可
+----
+- aria2c.exe 是 aria2 1.37.0 原始二进制，GPLv2+，详见 LICENSE-aria2.txt
+- 本工具通过命令行调用 aria2，未修改其源码
+
+常见问题
+--------
+- 提示找不到 aria2c.exe：确认 aria2c.exe 与本程序在同一目录
+- 下载需要令牌：点「Token 设置」填 HuggingFace / ModelScope / Civitai 的令牌，
+  只在本机加密保存，不会外传
+- 模型目录：按顺序自动找
+    1) LocModel 自己的配置（%LOCALAPPDATA%\LocModel\settings.json 里的 models_dir）
+    2) 上次记住的目录
+    3) 各盘符下的 LocModel\models、Apps\LocModel\models 等常见位置
+    4) 都没找到时，后台全盘查找名为 LocModel 的文件夹（有 15 秒上限）
+  仍然不对，就点右上「模型目录」按钮：可以查看当前路径、打开文件夹、或更改目录，改完会记住。
+- 自检：命令行运行  LocModel模型下载器.exe --doctor  可打印 aria2 路径、模型目录、配方数量
+        运行 --findmodels 可查看模型目录探测结果
+        运行 --issues 可检查图片/视频模型是否配套齐全
+        运行 --selftest 跑内置回归测试（应全部 PASS）
+        运行 --verify <文件> [仓库] 校验本地文件（返回码 0 一致 / 1 不一致 / 3 无法比对）
+       注意：本程序是窗口程序，在 cmd 里它会挂到当前控制台输出，但 cmd 不会等它结束；
+       批处理里想等结果就写  start /wait LocModel模型下载器.exe --doctor ；
+       在 PowerShell 里直接运行会正常等待。
+
+说明
+----
+本工具只负责把文件下到正确位置，不修改 LocModel 程序本身。
+图片/视频模型能否运行取决于 LocModel 内置的管线，不在本工具控制范围内。

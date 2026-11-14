@@ -1,0 +1,17 @@
+aria2c.exe 许可说明
+====================
+
+本工具目录内的 aria2c.exe 是 aria2（版本 1.37.0，x86_64 Windows 构建）的原始二进制，
+未做任何修改，仅作为下载引擎随工具一起分发。
+
+aria2 的授权：GNU General Public License v2 或更新版本（GPLv2+）。
+项目主页：https://aria2.github.io/
+源代码：  https://github.com/aria2/aria2
+许可证全文：https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+按 GPL 要求：
+- 本工具未修改 aria2 源码，仅按原样分发二进制；
+- 任何人可以从上述地址获取 aria2 的完整源代码；
+- 如需本工具随附二进制的对应源码，请从上面 GitHub 地址获取同一版本（1.37.0）源码。
+
+本工具自身（LocModel 模型下载器）与 aria2 相互独立，通过命令行调用 aria2c.exe。
