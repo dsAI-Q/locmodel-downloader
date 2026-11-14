@@ -12,9 +12,11 @@ if not exist "%CSC%" (
 
 set "ICON="
 if exist "app.ico" set "ICON=/win32icon:app.ico"
+set "QR="
+if exist "brand_qr.png" set "QR=/resource:brand_qr.png"
 
 echo Building...
-"%CSC%" /nologo /target:winexe /platform:anycpu /optimize+ %ICON% /out:LocModelDownloader.exe /r:System.dll /r:System.Core.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll LocModelDownloader.cs
+"%CSC%" /nologo /target:winexe /platform:anycpu /optimize+ %ICON% %QR% /out:LocModelDownloader.exe /r:System.dll /r:System.Core.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll LocModelDownloader.cs
 
 if errorlevel 1 (
   echo.

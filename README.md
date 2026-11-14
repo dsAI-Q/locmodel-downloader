@@ -55,7 +55,9 @@ LocModel模型下载器.exe --recipe <id> [量化]       # 查看配方要下的
 build.cmd
 ```
 
-产物是同目录下的 `LocModelDownloader.exe`（和便携包里的中文名程序是同一个，改名不影响）。需要 `csc.exe`（.NET Framework 4 自带，路径 `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\`）。源码是单文件 `LocModelDownloader.cs`，无第三方 NuGet 依赖。想带图标就把 `app.ico` 放到 `build.cmd` 旁边再编译。
+产物是同目录下的 `LocModelDownloader.exe`（和便携包里的中文名程序是同一个，改名不影响）。需要 `csc.exe`（.NET Framework 4 自带，路径 `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\`）。源码是单文件 `LocModelDownloader.cs`，无第三方 NuGet 依赖。
+
+界面上的猴子图标和右侧二维码是可选资源：把 `app.ico`（窗口图标）和 `brand_qr.png`（二维码）放到 `build.cmd` 旁边，脚本会自动编进去；不放也能编译，只是没有图标和二维码。
 
 ```
 LocModelDownloader.cs   全部源码（约 4000 行）
