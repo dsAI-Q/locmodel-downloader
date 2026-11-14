@@ -17,8 +17,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.1.0")]
-[assembly: AssemblyFileVersion("1.1.1.0")]
+[assembly: AssemblyVersion("1.1.3.0")]
+[assembly: AssemblyFileVersion("1.1.3.0")]
 
 namespace LocModelDownloader
 {
@@ -254,6 +254,17 @@ namespace LocModelDownloader
                 return null;
             }
             catch (Exception ex) { return "读取失败：" + ex.Message; }
+        }
+
+        // 用户常把「文件名」或「网页路径」当仓库名粘进来，单独识别一下
+        public static bool LooksLikeModelFile(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return false;
+            string t = s.Trim().ToLowerInvariant();
+            string[] exts = { ".safetensors", ".gguf", ".bin", ".pt", ".pth", ".ckpt", ".onnx", ".pkl" };
+            foreach (string e in exts) if (t.EndsWith(e)) return true;
+            if (t.Contains("/file/view/") || t.Contains("\\file\\view\\")) return true;
+            return false;
         }
 
         public static string NormRepo(string input)
@@ -3227,7 +3238,8 @@ namespace LocModelDownloader
                 "使用方法（全部走 aria2 多线程，支持断点续传）：" + Environment.NewLine +
                 "1. HuggingFace：来源选 HuggingFace，填 owner/仓库名（例 mradermacher/xxx-GGUF）→ 获取文件列表 → 勾选 → 开始下载。" + Environment.NewLine +
                 "2. 魔塔 ModelScope：来源选 ModelScope，填 owner/仓库名（例 Qwen/Qwen2.5-7B-Instruct-GGUF），步骤同上。" + Environment.NewLine +
-                "3. C站 Civitai：来源选 Civitai，填模型版本 ID、模型主页链接或带 modelVersionId 的链接；需能访问 civitai.com。" + Environment.NewLine +
+                "3. C站 Civitai：来源选 Civitai，填版本 ID 或模型页链接；只填文件名不行，需能访问 civitai.com。" + Environment.NewLine +
+                "注：三站都只认仓库/版本，不认「文件名」；只有文件名请先去站点找到它所在的仓库。" + Environment.NewLine +
                 "图片/视频模型请用「图片/视频配方下载」；多任务用「批量队列」；校验已下载的文件用「校验文件」。";
 
             Controls.AddRange(new Control[] {
@@ -3600,15 +3612,27 @@ namespace LocModelDownloader
 
         async Task<List<Core.FileEntry>> FetchWithAuth(Source src, string mirror, string repo)
         {
+            int attempt = 0;
             while (true)
             {
                 try { return await Task.Run(() => Core.FetchFiles(src, mirror, repo)); }
                 catch (AuthNeeded)
                 {
-                    MessageBox.Show("这个仓库需要访问令牌。请在接下来的窗口填写对应平台的令牌（只存在本机，加密保存）。",
-                        "需要令牌", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    TokenForm tf = new TokenForm();
-                    if (tf.ShowDialog(this) != DialogResult.OK) throw;
+                    attempt++;
+                    if (attempt > 2) throw;   // 填了令牌还不行就停下，别无限弹窗
+                    string who = src == Source.HF ? "HuggingFace" : (src == Source.MS ? "魔塔" : "C站");
+                    string msg = who + " 拒绝了请求（HTTP 401/403）。\r\n\r\n" +
+                                 "最常见的原因是：仓库名写错、仓库不存在。\r\n" +
+                                 "其次是：私有仓库，或需要同意协议的 gated 仓库。\r\n" +
+                                 "最后才是：确实需要令牌。\r\n\r\n" +
+                                 "当前填的是：" + repo + "\r\n\r\n" +
+                                 "要先填 " + who + " 令牌再试一次吗？\r\n" +
+                                 "（不确定就点「否」，先检查仓库名拼写或换个来源）";
+                    if (MessageBox.Show(msg, "访问被拒绝", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) throw;
+                    using (TokenForm tf = new TokenForm())
+                    {
+                        if (tf.ShowDialog(this) != DialogResult.OK) throw;
+                    }
                 }
             }
         }
@@ -3616,7 +3640,25 @@ namespace LocModelDownloader
         async void LoadList()
         {
             Source src = Src;
-            string repo = (src == Source.Civitai) ? txtRepo.Text.Trim() : Core.NormRepo(txtRepo.Text);
+            string raw = txtRepo.Text.Trim();
+            string repo = (src == Source.Civitai) ? raw : Core.NormRepo(raw);
+            if (Core.LooksLikeModelFile(raw))
+            {
+                string tip;
+                if (src == Source.Civitai)
+                    tip = "这是模型文件名，不是 C站 的版本 ID。\r\n\r\n" +
+                          "C站要填：模型版本 ID（纯数字）或模型页链接（civitai.com/models/数字/...）。\r\n" +
+                          "找法：打开模型页 → 点进具体版本 → 看地址栏里 modelVersionId= 后面的数字。";
+                else
+                    tip = "「" + raw + "」看起来是模型文件名（或网页路径），不是仓库名。\r\n\r\n" +
+                          "HuggingFace / 魔塔 要填 owner/仓库名，例如：\r\n" +
+                          "  mradermacher/Model-NAME-GGUF\r\n" +
+                          "  Qwen/Qwen2.5-7B-Instruct-GGUF\r\n\r\n" +
+                          "如果你只有文件名：先去站点找到它所在的仓库，再复制仓库地址；\r\n" +
+                          "如果这个文件来自 C站，把来源切到 Civitai，填模型版本 ID 或模型页链接。";
+                MessageBox.Show(tip, "这不是仓库名");
+                return;
+            }
             if (src == Source.Civitai)
             {
                 if (repo.Length < 2) { MessageBox.Show("Civitai 请填模型版本 ID 或模型页面链接。", "提示"); return; }
