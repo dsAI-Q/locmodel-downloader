@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -18,8 +18,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.12.0")]
-[assembly: AssemblyFileVersion("1.1.12.0")]
+[assembly: AssemblyVersion("1.1.13.0")]
+[assembly: AssemblyFileVersion("1.1.13.0")]
 
 namespace LocModelDownloader
 {
@@ -1045,16 +1045,11 @@ namespace LocModelDownloader
             {
                 string id = Path.GetFileName(d);
                 if (string.Equals(id, "common", StringComparison.OrdinalIgnoreCase)) continue;
+                // loras 和用户自建的目录不是配方，别每次启动都当成“模型不完整”
+                if (string.Equals(id, "loras", StringComparison.OrdinalIgnoreCase)) continue;
                 Recipe rec = null;
                 foreach (Recipe r in recipes) if (r.Id == id) rec = r;
-                if (rec == null)
-                {
-                    RecipeIssue ni = new RecipeIssue();
-                    ni.Id = id; ni.Title = id;
-                    ni.Message = id + "：不在配方表里，LocModel 可能无法使用";
-                    issues.Add(ni);
-                    continue;
-                }
+                if (rec == null) continue;
 
                 List<string> have = new List<string>();
                 List<string> partial = new List<string>();
