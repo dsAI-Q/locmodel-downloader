@@ -18,8 +18,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.11.0")]
-[assembly: AssemblyFileVersion("1.1.11.0")]
+[assembly: AssemblyVersion("1.1.12.0")]
+[assembly: AssemblyFileVersion("1.1.12.0")]
 
 namespace LocModelDownloader
 {
@@ -178,6 +178,9 @@ namespace LocModelDownloader
             public string Repo;
             public string SubPath;
             public string SourceNote;
+            public string RelPath;       // 相对模型目录的路径，方便显示
+            public long Downloaded;      // .part 当前大小
+            public long Expected;        // .part.meta 里记录的总大小，0 表示未知
         }
 
         public class Recipe
@@ -1949,7 +1952,7 @@ namespace LocModelDownloader
             if (!string.IsNullOrEmpty(outParent)) Directory.CreateDirectory(outParent);
             bool resumable = File.Exists(outPath + ".aria2");
 
-            // LocModel 的 .part 没有 aria2 控制文件，接不上续传，这里直接清掉
+            // LocModel 的 .part 没有 aria2 控制文件，接不上续传，这里直接清掉（连同 .part.meta）
             try
             {
                 if (File.Exists(outPath + ".part"))
@@ -1957,6 +1960,7 @@ namespace LocModelDownloader
                     File.Delete(outPath + ".part");
                     if (log != null) log("=== 已清理 LocModel 残留的 .part：" + saveAs);
                 }
+                if (File.Exists(outPath + ".part.meta")) File.Delete(outPath + ".part.meta");
             }
             catch { }
 
@@ -2265,58 +2269,92 @@ namespace LocModelDownloader
             {
                 if (!Directory.Exists(modelsDir)) return list;
 
-                foreach (string d in Directory.GetDirectories(modelsDir))
+                // 旧配方表只用来把“文件名”翻成仓库，不再假设任何目录结构
+                Dictionary<string, Component> known = new Dictionary<string, Component>(StringComparer.OrdinalIgnoreCase);
+                Dictionary<string, string> knownTitle = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                try
                 {
-                    string name = Path.GetFileName(d);
-                    if (string.Equals(name, "image", StringComparison.OrdinalIgnoreCase)) continue;
-                    int idx = name.IndexOf("__");
-                    if (idx <= 0) continue;
-                    foreach (string p in Directory.GetFiles(d, "*.part"))
+                    foreach (Recipe r in LoadRecipes())
                     {
-                        string fn = Path.GetFileName(p);
-                        Partial pt = new Partial();
-                        pt.Dir = d;
-                        pt.FileName = fn.Substring(0, fn.Length - 5);
-                        pt.Repo = name.Substring(0, idx) + "/" + name.Substring(idx + 2);
-                        pt.SubPath = pt.FileName;
-                        pt.SourceNote = "文字/对话模型";
-                        list.Add(pt);
-                    }
-                }
-
-                string img = Path.Combine(modelsDir, "image");
-                if (Directory.Exists(img))
-                {
-                    List<Recipe> recipes = LoadRecipes();
-                    foreach (string d in Directory.GetDirectories(img))
-                    {
-                        string id = Path.GetFileName(d);
-                        Recipe rec = null;
-                        foreach (Recipe r in recipes) if (r.Id == id) rec = r;
-                        foreach (string p in Directory.GetFiles(d, "*.part"))
+                        List<Component> all = new List<Component>();
+                        foreach (List<Component> g in r.Quants) all.AddRange(g);
+                        all.AddRange(r.Fixed);
+                        foreach (Component c in all)
                         {
-                            string fn = Path.GetFileName(p);
-                            fn = fn.Substring(0, fn.Length - 5);
-                            Partial pt = null;
-                            if (rec != null)
-                            {
-                                List<Component> all = new List<Component>();
-                                foreach (List<Component> g in rec.Quants) all.AddRange(g);
-                                all.AddRange(rec.Fixed);
-                                foreach (Component c in all)
-                                    if (c.SaveAs == fn) { pt = new Partial(); pt.Repo = c.Repo; pt.SubPath = c.Path; break; }
-                            }
-                            if (pt == null) continue;
-                            pt.Dir = d;
-                            pt.FileName = fn;
-                            pt.SourceNote = "图片/视频配方：" + (rec != null ? rec.Title : id);
-                            list.Add(pt);
+                            if (c == null || string.IsNullOrEmpty(c.SaveAs) || known.ContainsKey(c.SaveAs)) continue;
+                            known[c.SaveAs] = c;
+                            knownTitle[c.SaveAs] = r.Title;
                         }
                     }
                 }
+                catch { }
+
+                // 整个模型目录递归扫，image\common、text_encoders 这类子目录也能看到
+                foreach (string p in Directory.GetFiles(modelsDir, "*.part", SearchOption.AllDirectories))
+                {
+                    try
+                    {
+                        FileInfo fi = new FileInfo(p);
+                        string fn = fi.Name;
+                        if (fn.Length <= 5) continue;
+                        string name = fn.Substring(0, fn.Length - 5);
+
+                        Partial pt = new Partial();
+                        pt.Dir = fi.DirectoryName;
+                        pt.FileName = name;
+                        pt.SubPath = name;
+                        pt.Downloaded = fi.Length;
+                        pt.Expected = ReadPartMetaSize(p + ".meta");
+                        pt.RelPath = p.Substring(modelsDir.Length).TrimStart('\\', '/');
+
+                        string relNoPart = pt.RelPath.Substring(0, pt.RelPath.Length - 5);
+                        string[] segs = relNoPart.Split('\\', '/');
+                        string top = segs.Length > 0 ? segs[0] : "";
+                        int us = top.IndexOf("__");
+                        if (us > 0 && us + 2 < top.Length)
+                        {
+                            // 老约定：models\<owner>__<repo>\...，子目录按仓库内路径还原
+                            pt.Repo = top.Substring(0, us) + "/" + top.Substring(us + 2);
+                            pt.SubPath = segs.Length > 1 ? string.Join("/", segs, 1, segs.Length - 1) : name;
+                            pt.SourceNote = "文字/对话模型";
+                        }
+                        else if (known.ContainsKey(name))
+                        {
+                            Component c = known[name];
+                            pt.Repo = c.Repo;
+                            pt.SubPath = c.Path;
+                            pt.SourceNote = "配方：" + knownTitle[name];
+                        }
+                        else
+                        {
+                            pt.Repo = null;
+                            pt.SourceNote = "来源未知";
+                        }
+                        list.Add(pt);
+                    }
+                    catch { }
+                }
+                list.Sort(delegate(Partial a, Partial b)
+                {
+                    return string.Compare(a.RelPath, b.RelPath, StringComparison.OrdinalIgnoreCase);
+                });
             }
             catch { }
             return list;
+        }
+
+        // LocModel 的 .part.meta 里记着总大小：{"size":5027784800,"mismatch":0}
+        static long ReadPartMetaSize(string metaPath)
+        {
+            try
+            {
+                if (!File.Exists(metaPath)) return 0;
+                Match m = Regex.Match(File.ReadAllText(metaPath), "\"size\"\\s*:\\s*(\\d+)");
+                long v;
+                if (m.Success && long.TryParse(m.Groups[1].Value, out v)) return v;
+            }
+            catch { }
+            return 0;
         }
 
         // ---------- 配方（外置 recipes.json） ----------
@@ -2545,6 +2583,50 @@ namespace LocModelDownloader
                 Log("recipes.json 解析失败，改用内置配方: " + ex.Message);
             }
             return BuiltinRecipes();
+        }
+    }
+
+    // 一个小输入框：接管时用来补“来源仓库”
+    class PromptForm : Form
+    {
+        TextBox box;
+
+        public static string Show(IWin32Window owner, string title, string label, string def)
+        {
+            using (PromptForm f = new PromptForm())
+            {
+                f.Text = title;
+                f.Width = 600; f.Height = 300;
+                f.StartPosition = FormStartPosition.CenterParent;
+                f.FormBorderStyle = FormBorderStyle.FixedDialog;
+                f.MaximizeBox = false; f.MinimizeBox = false;
+                f.Font = new Font("Microsoft YaHei UI", 9f);
+                Core.ApplyIcon(f);
+
+                Label l = new Label();
+                l.Text = label;
+                l.SetBounds(14, 10, 560, 190);
+
+                f.box = new TextBox();
+                f.box.SetBounds(14, 206, 560, 24);
+                f.box.Text = def ?? "";
+
+                Button ok = new Button();
+                ok.Text = "确定"; ok.SetBounds(394, 240, 80, 26);
+                ok.DialogResult = DialogResult.OK;
+
+                Button skip = new Button();
+                skip.Text = "跳过"; skip.SetBounds(486, 240, 80, 26);
+                skip.DialogResult = DialogResult.Cancel;
+
+                f.Controls.Add(l);
+                f.Controls.Add(f.box);
+                f.Controls.Add(ok);
+                f.Controls.Add(skip);
+                f.AcceptButton = ok;
+                f.CancelButton = skip;
+                return f.ShowDialog(owner) == DialogResult.OK ? f.box.Text.Trim() : null;
+            }
         }
     }
 
@@ -3981,7 +4063,7 @@ namespace LocModelDownloader
 
             if (ps.Count == 0)
             {
-                MessageBox.Show(this, "没发现未完成的下载（.part）。\r\n先在 LocModel 里点下载，再回来点这里。", "提示");
+                MessageBox.Show(this, "没发现未完成的下载（.part）。\r\n已扫描整个模型目录（含 image\\common 等多层子目录）。\r\n先在 LocModel 里点下载，再回来点这里。", "提示");
                 btnTakeover.Enabled = true;
                 return;
             }
@@ -3989,13 +4071,53 @@ namespace LocModelDownloader
             StringBuilder sb = new StringBuilder();
             sb.AppendLine("检测到 " + ps.Count + " 个未完成的下载：");
             sb.AppendLine();
-            foreach (Core.Partial p in ps) sb.AppendLine("  - " + p.FileName + "    [" + p.SourceNote + "]");
+            foreach (Core.Partial p in ps)
+            {
+                string size = Core.Fmt(p.Downloaded);
+                if (p.Expected > 0) size += " / " + Core.Fmt(p.Expected);
+                sb.AppendLine("  - " + p.RelPath);
+                sb.AppendLine("      已下 " + size + "    [" + p.SourceNote + "]");
+            }
             sb.AppendLine();
             sb.Append("请先在 LocModel 里暂停这些下载，然后点确定：我会删掉 .part 并用 aria2 从镜像接管。继续吗？");
             if (MessageBox.Show(this, sb.ToString(), "接管下载", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
             {
                 btnTakeover.Enabled = true;
                 return;
+            }
+
+            // 来源未知的：允许补一个共同的仓库，补不了就跳过
+            List<Core.Partial> unknown = new List<Core.Partial>();
+            foreach (Core.Partial p in ps) if (string.IsNullOrEmpty(p.Repo)) unknown.Add(p);
+            if (unknown.Count > 0)
+            {
+                StringBuilder ub = new StringBuilder();
+                ub.AppendLine("以下 " + unknown.Count + " 个文件找不到来源仓库：");
+                ub.AppendLine();
+                foreach (Core.Partial p in unknown) ub.AppendLine("  - " + p.RelPath);
+                ub.AppendLine();
+                ub.Append("如果它们来自同一个仓库，现在填上（owner/仓库名，例如 Qwen/Qwen3-VL-8B-Instruct-GGUF）。\r\n不填就跳过这些文件。");
+                string repo = PromptForm.Show(this, "补来源仓库", ub.ToString(), "");
+                if (!string.IsNullOrEmpty(repo))
+                {
+                    string norm = Core.NormRepo(repo);
+                    if (norm.IndexOf('/') > 0)
+                    {
+                        foreach (Core.Partial p in unknown)
+                        {
+                            p.Repo = norm;
+                            p.SubPath = p.FileName;
+                            p.SourceNote = "手动指定";
+                        }
+                    }
+                }
+                ps = ps.FindAll(delegate(Core.Partial p) { return !string.IsNullOrEmpty(p.Repo); });
+                if (ps.Count == 0)
+                {
+                    MessageBox.Show(this, "没有可接管的文件（来源都未知）。", "提示");
+                    btnTakeover.Enabled = true;
+                    return;
+                }
             }
 
             cancelFlag = false;
@@ -4711,7 +4833,10 @@ namespace LocModelDownloader
                 List<Core.Partial> ps = Core.ScanPartials(md);
                 Console.WriteLine("models=" + md + "  partials=" + ps.Count);
                 foreach (Core.Partial p in ps)
-                    Console.WriteLine("  " + p.FileName + "\t[" + p.SourceNote + "]\t" + p.Repo + " :: " + p.SubPath + "\t-> " + p.Dir);
+                {
+                    string size = Core.Fmt(p.Downloaded) + (p.Expected > 0 ? " / " + Core.Fmt(p.Expected) : "");
+                    Console.WriteLine("  " + p.RelPath + "\t" + size + "\t[" + p.SourceNote + "]\t" + (string.IsNullOrEmpty(p.Repo) ? "来源未知" : p.Repo + " :: " + p.SubPath));
+                }
                 return ps.Count == 0 ? 0 : 1;
             }
             if (args.Length > 0 && args[0] == "--shot")

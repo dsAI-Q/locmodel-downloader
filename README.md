@@ -4,7 +4,7 @@
 
 LocModel 官网：<https://locmodel.com/>
 
-当前版本 **1.1.6** · [下载最新版](../../releases/latest) · [更新记录](#更新记录)
+当前版本 **1.1.12** · [下载最新版](../../releases/latest) · [更新记录](#更新记录)
 
 ![主界面](screenshots/main-1.1.2.png)
 
@@ -86,6 +86,12 @@ screenshots/            界面截图
 - 下载时令牌会出现在 aria2 的命令行参数里，同机其他进程理论上可见（单用户机器风险低）
 
 ## 更新记录
+
+**1.1.12**
+- 修复：「接管正在下载的」只看 `<owner__repo>` 和 `image/<配方ID>` 两种目录，LocModel 3.1.0 把缺的组件下到 `image\common` 时一个都看不到；现在递归扫描整个模型目录
+- 新增：接管列表显示真实相对路径和「已下 / 总大小」（读 LocModel 的 `.part.meta`）
+- 新增：来源未知的 `.part` 可以现场填仓库（`owner/repo`）后接管；不填则跳过
+- 说明：LocModel 3.1.0 官方支持 ComfyUI 模型库，缺的组件由它自己下到 `D:\LocModel\models\image\common`
 
 **1.1.11**
 - 新增：队列支持 `repo :: *` 下载整个仓库的全部文件（不限扩展名），用于 ComfyUI 等其它工具的模型
