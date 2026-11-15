@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -18,8 +18,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.13.0")]
-[assembly: AssemblyFileVersion("1.1.13.0")]
+[assembly: AssemblyVersion("1.1.14.0")]
+[assembly: AssemblyFileVersion("1.1.14.0")]
 
 namespace LocModelDownloader
 {
@@ -1279,6 +1279,21 @@ namespace LocModelDownloader
                 int cleaned = CleanStaleParts(tmp, null);
                 check(cleaned >= 1 && !File.Exists(Path.Combine(rdir, main + ".part")) && File.Exists(Path.Combine(rdir, main)),
                     "清理残留 .part");
+
+                // 2g 用户自建目录（loras）不参与配方检查，里面有文件也不误报
+                Directory.CreateDirectory(Path.Combine(tmp, "image", "loras"));
+                File.WriteAllText(Path.Combine(tmp, "image", "loras", "my_lora.safetensors"), "x");
+                bool lorasQuiet = true;
+                foreach (RecipeIssue i in RecipeIssuesDetailed(tmp)) if (i.Id == "loras") lorasQuiet = false;
+                check(lorasQuiet, "image\\loras 不误报");
+
+                // 2h 递归扫描：image\common 里的 .part 也能发现，并读出 .meta 总大小
+                string testPart = Path.Combine(tmp, "image", "common", "unknown_test.gguf.part");
+                File.WriteAllText(testPart, "abc");
+                File.WriteAllText(testPart + ".meta", "{\"size\":123456789,\"mismatch\":0}");
+                Partial hit = null;
+                foreach (Partial p in ScanPartials(tmp)) if (p.FileName == "unknown_test.gguf") hit = p;
+                check(hit != null && hit.Expected == 123456789, "扫描 image\\common 的 .part（含 .meta 大小）");
                 // 3) SameJob：不同文件不算重复，同文件算重复，落盘读回仍能判重
                 JobItem ja = new JobItem(); ja.Src = "hf"; ja.Repo = "o/r";
                 JobFile fa = new JobFile(); fa.Repo = "o/r"; fa.Path = "a.gguf"; fa.SaveAs = "a.gguf"; ja.Files.Add(fa);

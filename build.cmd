@@ -16,7 +16,7 @@ set "QR="
 if exist "brand_qr.png" set "QR=/resource:brand_qr.png"
 
 echo Building...
-"%CSC%" /nologo /target:winexe /platform:anycpu /optimize+ %ICON% %QR% /out:LocModelDownloader.exe /r:System.dll /r:System.Core.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll LocModelDownloader.cs
+"%CSC%" /nologo /codepage:65001 /target:winexe /platform:anycpu /optimize+ %ICON% %QR% /out:LocModelDownloader.exe /r:System.dll /r:System.Core.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll LocModelDownloader.cs
 
 if errorlevel 1 (
   echo.
