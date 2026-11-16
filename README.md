@@ -4,7 +4,7 @@
 
 LocModel 官网：<https://locmodel.com/>
 
-当前版本 **1.1.14** · [下载最新版](../../releases/latest) · [更新记录](#更新记录)
+当前版本 **1.1.15** · [下载最新版](../../releases/latest) · [更新记录](#更新记录)
 
 ![主界面](screenshots/main-1.1.2.png)
 
@@ -86,6 +86,10 @@ screenshots/            界面截图
 - 下载时令牌会出现在 aria2 的命令行参数里，同机其他进程理论上可见（单用户机器风险低）
 
 ## 更新记录
+
+**1.1.15**
+- 修复：aria2 报 `SSL/TLS handshake failure` 时自动改用「不校验证书」重试一次（下载后仍按大小/哈希校验）
+- 改进：TLS 仍失败时给出人话提示（校准系统时间、关代理/加速器、换 `https://hf-mirror.com`），不再只显示「aria2 退出码 1」
 
 **1.1.14**
 - 小加固：源码统一 UTF-8（带 BOM），`build.cmd` 固定 `/codepage:65001`，避免中文被按 GBK 读坏

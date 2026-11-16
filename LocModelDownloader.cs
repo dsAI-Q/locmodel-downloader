@@ -18,8 +18,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.14.0")]
-[assembly: AssemblyFileVersion("1.1.14.0")]
+[assembly: AssemblyVersion("1.1.15.0")]
+[assembly: AssemblyFileVersion("1.1.15.0")]
 
 namespace LocModelDownloader
 {
@@ -1944,9 +1944,16 @@ namespace LocModelDownloader
             return s >= 200 && s < 400;
         }
 
+        static string TlsHint()
+        {
+            return "TLS 握手失败（aria2 连不上镜像，不是模型文件的问题）。\r\n" +
+                   "常见原因：系统时间不对、代理/加速器或杀毒软件拦截 HTTPS、系统根证书太旧。\r\n" +
+                   "建议：校准 Windows 时间和时区 → 暂时关掉代理/加速器 → 把镜像地址改成 https://hf-mirror.com 再试。";
+        }
+
         public static int RunAriaTo(Source src, string mirror, string repo, string subPath, string saveAs, string targetDir,
             Action<string> log, Func<bool> cancelled, out string error, string urlOverride = null,
-            long expectSize = -1, string expectHash = null, string revision = null)
+            long expectSize = -1, string expectHash = null, string revision = null, bool insecure = false)
         {
             error = null;
             string aria = FindAria();
@@ -2039,7 +2046,8 @@ namespace LocModelDownloader
             psi.Arguments = "\"" + url + "\" -x" + cx + " -s" + cx + " -k 1M -d \"" + targetDir + "\" -o \"" + saveAs + "\""
                 + " --continue=true --file-allocation=none --max-connection-per-server=" + cx
                 + " --min-split-size=1M --retry-wait=3 --max-tries=5 --timeout=30 --auto-save-interval=1"
-                + " --summary-interval=2 --console-log-level=warn --check-certificate=true";
+                + " --summary-interval=2 --console-log-level=warn"
+                + (insecure ? " --check-certificate=false" : " --check-certificate=true");
             if (!string.IsNullOrEmpty(proxy))
                 psi.Arguments += " --all-proxy=\"" + proxy + "\"";
             if (!string.IsNullOrEmpty(tok))
@@ -2054,8 +2062,16 @@ namespace LocModelDownloader
             using (Process p = new Process())
             {
                 p.StartInfo = psi;
-                p.OutputDataReceived += delegate (object s, DataReceivedEventArgs e) { if (e.Data != null && log != null) log(e.Data); };
-                p.ErrorDataReceived += delegate (object s, DataReceivedEventArgs e) { if (e.Data != null && log != null) log(e.Data); };
+                StringBuilder tail = new StringBuilder();
+                Action<string> sink = delegate (string line)
+                {
+                    if (line == null) return;
+                    if (log != null) log(line);
+                    tail.AppendLine(line);
+                    if (tail.Length > 8000) tail.Remove(0, tail.Length - 8000);
+                };
+                p.OutputDataReceived += delegate (object s, DataReceivedEventArgs e) { if (e.Data != null) sink(e.Data); };
+                p.ErrorDataReceived += delegate (object s, DataReceivedEventArgs e) { if (e.Data != null) sink(e.Data); };
                 p.Start();
                 p.BeginOutputReadLine();
                 p.BeginErrorReadLine();
@@ -2071,7 +2087,24 @@ namespace LocModelDownloader
                     System.Threading.Thread.Sleep(300);
                 }
                 p.WaitForExit();
-                if (p.ExitCode != 0) { error = "aria2 退出码 " + p.ExitCode; return p.ExitCode; }
+                if (p.ExitCode != 0)
+                {
+                    string t = tail.ToString();
+                    bool tls = t.IndexOf("SSL/TLS", StringComparison.OrdinalIgnoreCase) >= 0
+                            || t.IndexOf("handshake", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (tls && !insecure)
+                    {
+                        if (log != null) log("=== TLS 握手失败：改用「不校验证书」重试一次（下载后仍按大小/哈希校验）");
+                        int r2 = RunAriaTo(src, mirror, repo, subPath, saveAs, targetDir, log, cancelled, out error,
+                            urlOverride, expectSize, expectHash, revision, true);
+                        if (r2 == 0) return 0;
+                        if (string.IsNullOrEmpty(error) || error.IndexOf("aria2 退出码", StringComparison.Ordinal) >= 0)
+                            error = TlsHint();
+                        return r2;
+                    }
+                    error = tls ? TlsHint() : ("aria2 退出码 " + p.ExitCode);
+                    return p.ExitCode;
+                }
             }
             try
             {
