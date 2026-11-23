@@ -18,8 +18,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.17.0")]
-[assembly: AssemblyFileVersion("1.1.17.0")]
+[assembly: AssemblyVersion("1.1.18.0")]
+[assembly: AssemblyFileVersion("1.1.18.0")]
 
 namespace LocModelDownloader
 {
@@ -149,6 +149,35 @@ namespace LocModelDownloader
                 if (!string.IsNullOrEmpty(proxy))
                     WebRequest.DefaultWebProxy = new WebProxy(proxy);
             }
+            catch { }
+        }
+
+        // 全部下载完成后自动关机：先排计划（shutdown /s /t N），弹窗可撤销
+        public static void ArmShutdown(IWin32Window owner, int seconds)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo("shutdown.exe",
+                    "/s /t " + seconds + " /c \"LocModel下载器：全部下载完成，即将关机\"")
+                { CreateNoWindow = true, UseShellExecute = false });
+            }
+            catch (Exception ex)
+            {
+                if (owner != null) MessageBox.Show(owner, "设置自动关机失败：" + ex.Message, "自动关机");
+                return;
+            }
+            using (ShutdownForm f = new ShutdownForm(seconds)) f.ShowDialog(owner);
+        }
+
+        public static void CancelShutdown()
+        {
+            try { Process.Start(new ProcessStartInfo("shutdown.exe", "/a") { CreateNoWindow = true, UseShellExecute = false }); }
+            catch { }
+        }
+
+        public static void ShutdownNow()
+        {
+            try { Process.Start(new ProcessStartInfo("shutdown.exe", "/s /t 0") { CreateNoWindow = true, UseShellExecute = false }); }
             catch { }
         }
 
@@ -2671,6 +2700,53 @@ namespace LocModelDownloader
         }
     }
 
+    // 全部下载完成后的关机倒计时（可取消）
+    class ShutdownForm : Form
+    {
+        System.Windows.Forms.Timer timer;
+        int left;
+        bool keep;
+
+        public ShutdownForm(int seconds)
+        {
+            left = seconds;
+            Text = "全部下载完成";
+            Width = 440; Height = 190;
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false; MinimizeBox = false;
+            Font = new Font("Microsoft YaHei UI", 9f);
+            Core.ApplyIcon(this);
+
+            Label l = new Label();
+            l.SetBounds(18, 18, 396, 56);
+            l.Text = "全部下载完成，马上就好。\r\n" + seconds + " 秒后自动关机。";
+
+            Button cancel = new Button(); cancel.Text = "取消关机"; cancel.SetBounds(200, 104, 100, 30);
+            cancel.Click += delegate { Core.CancelShutdown(); keep = true; Close(); };
+            Button now = new Button(); now.Text = "立即关机"; now.SetBounds(310, 104, 100, 30);
+            now.Click += delegate { Core.ShutdownNow(); keep = true; Close(); };
+
+            timer = new System.Windows.Forms.Timer(); timer.Interval = 1000;
+            timer.Tick += delegate
+            {
+                left--;
+                if (left <= 0) { keep = true; Close(); return; }
+                l.Text = "全部下载完成，马上就好。\r\n" + left + " 秒后自动关机。";
+            };
+            timer.Start();
+
+            Controls.Add(l); Controls.Add(cancel); Controls.Add(now);
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (timer != null) { timer.Stop(); timer.Dispose(); timer = null; }
+            if (!keep) Core.CancelShutdown();   // 点 X / 非正常关闭 = 取消关机
+            base.OnFormClosing(e);
+        }
+    }
+
     // 一个小输入框：接管时用来补“来源仓库”
     class PromptForm : Form
     {
@@ -2981,6 +3057,7 @@ namespace LocModelDownloader
         TextBox txtAdd;
         Label lblStatus, lblHint;
         Button btnAdd, btnStart, btnPause, btnSkip, btnRemove, btnClose;
+        CheckBox chkShutdown;
         List<Core.JobItem> jobs = new List<Core.JobItem>();
         string modelsDir, mirror;
         volatile bool pauseFlag, skipFlag;
@@ -2994,7 +3071,7 @@ namespace LocModelDownloader
             this.mirror = mirror;
 
             Text = "批量队列（aria2 断点续传）";
-            Width = 760; Height = 560;
+            Width = 760; Height = 590;
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false; MinimizeBox = false;
@@ -3039,18 +3116,22 @@ namespace LocModelDownloader
                 Close();
             };
 
-            lblStatus = new Label(); lblStatus.SetBounds(16, 396, 716, 20);
+            chkShutdown = new CheckBox();
+            chkShutdown.Text = "全部完成后关机";
+            chkShutdown.SetBounds(16, 380, 200, 24);
+
+            lblStatus = new Label(); lblStatus.SetBounds(16, 408, 716, 20);
             lblStatus.Text = "就绪";
             lblStatus.ForeColor = Color.FromArgb(20, 90, 160);
 
             Label l3 = new Label();
-            l3.SetBounds(16, 424, 716, 80);
+            l3.SetBounds(16, 432, 716, 80);
             l3.ForeColor = Color.Gray;
             l3.Text = "说明：每次下载失败/暂停都会保留 aria2 的 .aria2 断点文件，下次点「开始 / 继续」会从断点续传；\r\n" +
                       "关闭工具再打开，队列会保留，并会提示你继续上次没下完的任务。\r\n" +
                       "下载前会检查磁盘剩余空间，不足会拦下来。";
 
-            Controls.AddRange(new Control[] { l1, lst, l2, lblHint, txtAdd, btnAdd, btnStart, btnPause, btnSkip, btnRemove, btnClose, lblStatus, l3 });
+            Controls.AddRange(new Control[] { l1, lst, l2, lblHint, txtAdd, btnAdd, btnStart, btnPause, btnSkip, btnRemove, btnClose, chkShutdown, lblStatus, l3 });
 
             jobs = Core.LoadQueue();
             RefreshList();
@@ -3209,6 +3290,7 @@ namespace LocModelDownloader
             running = true; pauseFlag = false; skipFlag = false;
             btnStart.Enabled = false; btnPause.Enabled = true; btnAdd.Enabled = false;
             btnRemove.Enabled = false;
+            int processed = 0;
 
             try
             {
@@ -3251,7 +3333,7 @@ namespace LocModelDownloader
                     }
                     else
                     {
-                        if (j.Status != "failed") j.Status = "done";
+                        if (j.Status != "failed") { j.Status = "done"; processed++; }
                     }
                     RefreshList();
                     if (pauseFlag) break;
@@ -3269,6 +3351,12 @@ namespace LocModelDownloader
                 Core.SaveQueue(jobs);
                 if (pauseFlag) lblStatus.Text = "已暂停（断点已保存，下次可继续）";
                 else lblStatus.Text = "队列结束";
+                bool allDone = processed > 0 && !pauseFlag;
+                if (allDone)
+                    foreach (Core.JobItem j in jobs)
+                        if (j.Status != "done") { allDone = false; break; }
+                if (allDone && chkShutdown.Checked)
+                    BeginInvoke(new Action(delegate { if (!IsDisposed) Core.ArmShutdown(this, 60); }));
             }
         }
 
@@ -3645,7 +3733,7 @@ namespace LocModelDownloader
         PictureBox pictureBox1;
         Label lblStatus, lblTarget;
         Button btnList, btnStart, btnAll, btnNone, btnCancel;
-        CheckBox chkAuto;
+        CheckBox chkAuto, chkShutdown;
         List<Core.FileEntry> files = new List<Core.FileEntry>();
         volatile bool cancelFlag;
         bool busy;
@@ -3822,6 +3910,10 @@ namespace LocModelDownloader
             chkAuto.SetBounds(240, 358, 190, 24);
             chkAuto.Checked = true;
 
+            chkShutdown = new CheckBox();
+            chkShutdown.Text = "全部完成后关机";
+            chkShutdown.SetBounds(440, 358, 150, 24);
+
             clb.ItemCheck += delegate (object s, ItemCheckEventArgs e)
             {
                 if (!chkAuto.Checked || ignoreChecks) return;
@@ -3867,7 +3959,7 @@ namespace LocModelDownloader
 
             Controls.AddRange(new Control[] {
                 l1, txtRepo, l2, cboSource, txtMirror, btnList, btnToken, btnRepoView, btnDir, btnQueue, btnVerify, l3, clb, pnlBrand,
-                btnAll, btnNone, chkAuto, btnStart, btnCancel, btnTakeover, btnRecipe, lblTarget, lblStatus, txtLog
+                btnAll, btnNone, chkAuto, chkShutdown, btnStart, btnCancel, btnTakeover, btnRecipe, lblTarget, lblStatus, txtLog
             });
 
             clb.Visible = false;
@@ -4133,6 +4225,7 @@ namespace LocModelDownloader
             btnQueue.Enabled = !b;
             btnVerify.Enabled = !b;
             btnDir.Enabled = !b;
+            if (chkShutdown != null) chkShutdown.Enabled = !b;
             btnRecipe.Enabled = !b;
             btnTakeover.Enabled = !b;
         }
@@ -4564,7 +4657,9 @@ namespace LocModelDownloader
 
             SetBusyUi(false);
             lblStatus.Text = "结束：成功 " + ok + "，失败 " + fail + (cancelFlag ? "，已取消" : "");
-            if (ok > 0 && !IsDisposed)
+            if (chkShutdown.Checked && ok > 0 && fail == 0 && !cancelFlag && !IsDisposed)
+                Core.ArmShutdown(this, 60);
+            else if (ok > 0 && !IsDisposed)
                 MessageBox.Show(this, "下载完成。\r\n请重启 LocModel，模型会自动出现在列表里。\r\n\r\n保存位置：\r\n" + dir, "完成");
         }
     }
