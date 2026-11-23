@@ -18,8 +18,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.16.0")]
-[assembly: AssemblyFileVersion("1.1.16.0")]
+[assembly: AssemblyVersion("1.1.17.0")]
+[assembly: AssemblyFileVersion("1.1.17.0")]
 
 namespace LocModelDownloader
 {
@@ -1617,7 +1617,7 @@ namespace LocModelDownloader
             if (src == Source.MS) list = FetchModelScope(repo, revision);
             else if (src == Source.Civitai) list = FetchCivitai(repo);
             else list = FetchHf(mirror, repo);
-            if (src == Source.HF) PreferMainlineLayout(list, mirror);
+            if (src == Source.HF || src == Source.MS) PreferMainlineLayout(list, src, mirror, revision);
             list.Sort(delegate (FileEntry a, FileEntry b)
             {
                 int ga = a.Name.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
@@ -1689,7 +1689,7 @@ namespace LocModelDownloader
         // 有些仓库（如 unsloth 的 Inkling 2）根目录 GGUF 是自家运行时专用格式，
         // llama.cpp 兼容版放在 Mainline_Support/，故意用 .gguf_file 后缀。
         // 这里把同名、尺寸一致的根目录文件替换成兼容版：直链指向 Mainline_Support，保存名仍是 .gguf。
-        static void PreferMainlineLayout(List<FileEntry> list, string mirror)
+        static void PreferMainlineLayout(List<FileEntry> list, Source src, string mirror, string revision)
         {
             if (list == null || list.Count < 2) return;
             Dictionary<string, FileEntry> compat = new Dictionary<string, FileEntry>(StringComparer.OrdinalIgnoreCase);
@@ -1716,7 +1716,7 @@ namespace LocModelDownloader
                 if (!compat.TryGetValue(fe.Name, out ml)) continue;
                 // 同名但尺寸差太多，说明不是同一份文件，别替换
                 if (fe.Size > 0 && ml.Size > 0 && Math.Abs(fe.Size - ml.Size) > 1024 * 1024) continue;
-                fe.Url = HfResolveUrl(mirror, fe.Repo, ml.Name);
+                fe.Url = UrlFor(src, mirror, fe.Repo, ml.Name, revision);
                 if (ml.Size > 0) fe.Size = ml.Size;
                 if (!string.IsNullOrEmpty(ml.Hash)) fe.Hash = ml.Hash;
                 fe.SaveAs = fe.Name;
@@ -1724,14 +1724,6 @@ namespace LocModelDownloader
                 used.Add(ml);
             }
             foreach (FileEntry ml in used) list.Remove(ml);   // 兼容版已经合并进同名条目，不再重复显示
-        }
-
-        static string HfResolveUrl(string mirror, string repo, string path)
-        {
-            string m = string.IsNullOrEmpty(mirror) ? DefaultMirror : mirror;
-            string[] parts = (path ?? "").Replace('\\', '/').Split('/');
-            for (int i = 0; i < parts.Length; i++) parts[i] = Uri.EscapeDataString(parts[i]);
-            return m.TrimEnd('/') + "/" + NormRepo(repo) + "/resolve/main/" + string.Join("/", parts);
         }
 
         static List<FileEntry> FetchModelScope(string repo, string revision)

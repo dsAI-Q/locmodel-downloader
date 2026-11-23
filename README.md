@@ -4,7 +4,7 @@
 
 LocModel 官网：<https://locmodel.com/>
 
-当前版本 **1.1.16** · [下载最新版](../../releases/latest) · [更新记录](#更新记录)
+当前版本 **1.1.17** · [下载最新版](../../releases/latest) · [更新记录](#更新记录)
 
 ![主界面](screenshots/main-1.1.2.png)
 
@@ -86,6 +86,9 @@ screenshots/            界面截图
 - 下载时令牌会出现在 aria2 的命令行参数里，同机其他进程理论上可见（单用户机器风险低）
 
 ## 更新记录
+
+**1.1.17**
+- 改进：`Mainline_Support` 兼容版优先现在也支持魔塔 ModelScope（HF 与魔塔都生效）；魔塔的 `Mainline_Support/xxx.gguf_file` 会按同名 `.gguf` 下载并保存，不用再手动改名
 
 **1.1.16**
 - 修复：unsloth 这类仓库根目录的 GGUF 是自家运行时格式（如 Inkling 2 的 `inkling2_loop`）；现在自动改用 `Mainline_Support/` 里的兼容版（同名、同尺寸），下载直链指向兼容版、保存名仍是 `.gguf`，列表标「Mainline 兼容版」
