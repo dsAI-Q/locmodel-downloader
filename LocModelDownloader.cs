@@ -18,8 +18,8 @@ using System.Windows.Forms;
 [assembly: AssemblyProduct("LocModel Downloader")]
 [assembly: AssemblyCompany("大圣Ai自习室")]
 [assembly: AssemblyDescription("LocModel 模型/配方下载器（aria2 多线程、断点续传、批量队列）")]
-[assembly: AssemblyVersion("1.1.18.0")]
-[assembly: AssemblyFileVersion("1.1.18.0")]
+[assembly: AssemblyVersion("1.1.19.0")]
+[assembly: AssemblyFileVersion("1.1.19.0")]
 
 namespace LocModelDownloader
 {
@@ -1160,6 +1160,7 @@ namespace LocModelDownloader
                         string src = Path.Combine(rdir, c.SaveAs);
                         string dst = Path.Combine(cdir, c.SaveAs);
                         if (!File.Exists(src) || File.Exists(dst)) continue;
+                        if (File.Exists(src + ".aria2") || File.Exists(src + ".part")) continue;   // 没下完的不要动
                         try
                         {
                             File.Move(src, dst);
@@ -2458,6 +2459,128 @@ namespace LocModelDownloader
         }
 
         // LocModel 的 .part.meta 里记着总大小：{"size":5027784800,"mismatch":0}
+        // ---- aria2 断点（.aria2 控制文件）----
+        public class Aria2Partial
+        {
+            public string Aria2Path;
+            public string FilePath;
+            public string Dir;
+            public string SaveAs;
+            public string Repo;
+            public string SubPath;
+            public string RelPath;
+            public long Total;
+            public long Done;
+            public int Pieces;
+            public int DonePieces;
+            public string SourceNote;
+        }
+
+        static uint Be32(byte[] b, int o)
+        {
+            return (uint)((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]);
+        }
+
+        static long Be64(byte[] b, int o)
+        {
+            long v = 0;
+            for (int i = 0; i < 8; i++) v = (v << 8) | b[o + i];
+            return v;
+        }
+
+        // aria2 控制文件（大端）：ver@0(2), pieceLen@10(4), total@14(8), uploaded@22(8), bitfieldLen@30(4), bitmap@34
+        public static Aria2Partial ReadAria2Partial(string aria2Path, string modelsDir)
+        {
+            try
+            {
+                byte[] b = File.ReadAllBytes(aria2Path);
+                if (b.Length < 34) return null;
+                int pieceLen = (int)Be32(b, 10);
+                long total = Be64(b, 14);
+                if (pieceLen <= 0 || total <= 0) return null;
+                int pieces = (int)((total + pieceLen - 1) / pieceLen);
+                int blen = (int)Be32(b, 30);
+                if (blen <= 0 || 34 + blen > b.Length) return null;
+                int done = 0;
+                for (int i = 0; i < pieces; i++)
+                {
+                    int bi = i >> 3;
+                    if (bi >= blen) break;
+                    if ((b[34 + bi] & (0x80 >> (i & 7))) != 0) done++;
+                }
+                Aria2Partial p = new Aria2Partial();
+                p.Aria2Path = aria2Path;
+                p.FilePath = aria2Path.Substring(0, aria2Path.Length - 6);
+                p.Dir = Path.GetDirectoryName(p.FilePath);
+                p.SaveAs = Path.GetFileName(p.FilePath);
+                p.Total = total;
+                p.Pieces = pieces;
+                p.DonePieces = done;
+                p.Done = Math.Min(total, (long)done * pieceLen);
+                p.RelPath = (modelsDir != null && aria2Path.StartsWith(modelsDir, StringComparison.OrdinalIgnoreCase))
+                    ? aria2Path.Substring(modelsDir.Length).TrimStart('\\', '/') : p.SaveAs;
+
+                string relNo = p.RelPath.Substring(0, p.RelPath.Length - 6);   // 去掉 .aria2
+                string[] segs = relNo.Split('\\', '/');
+                string top = segs.Length > 0 ? segs[0] : "";
+                int us = top.IndexOf("__");
+                if (us > 0 && us + 2 < top.Length)
+                {
+                    p.Repo = top.Substring(0, us) + "/" + top.Substring(us + 2);
+                    p.SubPath = segs.Length > 1 ? string.Join("/", segs, 1, segs.Length - 1) : p.SaveAs;
+                    p.SourceNote = "按目录名还原仓库";
+                }
+                return p;
+            }
+            catch { return null; }
+        }
+
+        public static List<Aria2Partial> ScanAria2Partials(string modelsDir)
+        {
+            List<Aria2Partial> list = new List<Aria2Partial>();
+            if (!Directory.Exists(modelsDir)) return list;
+            WalkAria2(modelsDir, list, modelsDir);
+            list.Sort(delegate(Aria2Partial a, Aria2Partial b)
+            {
+                return string.Compare(a.RelPath, b.RelPath, StringComparison.OrdinalIgnoreCase);
+            });
+            return list;
+        }
+
+        // 逐目录扫，遇到无权限/坏 junction 只跳过当前目录，不让整个扫描变空
+        static void WalkAria2(string dir, List<Aria2Partial> list, string modelsDir)
+        {
+            try
+            {
+                foreach (string f in Directory.GetFiles(dir, "*.aria2"))
+                {
+                    Aria2Partial p = ReadAria2Partial(f, modelsDir);
+                    if (p != null) list.Add(p);
+                }
+            }
+            catch { }
+            try
+            {
+                foreach (string d in Directory.GetDirectories(dir)) WalkAria2(d, list, modelsDir);
+            }
+            catch { }
+        }
+
+        // 已存在 .aria2 时，下载只需要「剩余字节」而不是整份大小
+        public static long RemainingFor(string filePath, long totalSize)
+        {
+            try
+            {
+                if (File.Exists(filePath + ".aria2"))
+                {
+                    Aria2Partial p = ReadAria2Partial(filePath + ".aria2", null);
+                    if (p != null && p.Total > 0) return Math.Max(0, p.Total - p.Done);
+                }
+            }
+            catch { }
+            return totalSize > 0 ? totalSize : 0;
+        }
+
         static long ReadPartMetaSize(string metaPath)
         {
             try
@@ -2744,6 +2867,126 @@ namespace LocModelDownloader
             if (timer != null) { timer.Stop(); timer.Dispose(); timer = null; }
             if (!keep) Core.CancelShutdown();   // 点 X / 非正常关闭 = 取消关机
             base.OnFormClosing(e);
+        }
+    }
+
+    // 「继续未完成」：扫描 .aria2 断点，按位图显示真实进度并续传
+    class ResumeForm : Form
+    {
+        CheckedListBox list;
+        Label lblInfo;
+        Button btnAll, btnNone, btnGo, btnClose;
+        List<Core.Aria2Partial> parts = new List<Core.Aria2Partial>();
+        string modelsDir, mirror;
+        bool busy;
+
+        public ResumeForm(string modelsDir, string mirror)
+        {
+            this.modelsDir = modelsDir;
+            this.mirror = mirror;
+            Text = "继续未完成的下载（aria2 断点）";
+            Width = 800; Height = 540;
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false; MinimizeBox = false;
+            Font = new Font("Microsoft YaHei UI", 9f);
+            Core.ApplyIcon(this);
+
+            Label l1 = new Label();
+            l1.SetBounds(16, 10, 760, 42);
+            l1.Text = "下面是模型目录里找到的 .aria2 断点。勾选后点「继续选中」，按位图从断点补洞，不会从头下载。\r\n来源默认 HuggingFace，仓库按目录名 owner__仓库 还原。";
+
+            list = new CheckedListBox();
+            list.SetBounds(16, 56, 760, 340);
+            list.CheckOnClick = true;
+            list.HorizontalScrollbar = true;
+
+            lblInfo = new Label();
+            lblInfo.SetBounds(16, 402, 760, 20);
+            lblInfo.Text = "就绪";
+
+            btnAll = new Button(); btnAll.Text = "全选"; btnAll.SetBounds(16, 432, 70, 28);
+            btnAll.Click += delegate { for (int i = 0; i < list.Items.Count; i++) list.SetItemChecked(i, true); };
+            btnNone = new Button(); btnNone.Text = "清空"; btnNone.SetBounds(92, 432, 70, 28);
+            btnNone.Click += delegate { for (int i = 0; i < list.Items.Count; i++) list.SetItemChecked(i, false); };
+            btnGo = new Button(); btnGo.Text = "继续选中"; btnGo.SetBounds(620, 432, 90, 28);
+            btnGo.Click += delegate { Go(); };
+            btnClose = new Button(); btnClose.Text = "关闭"; btnClose.SetBounds(716, 432, 60, 28);
+            btnClose.Click += delegate { if (busy) { MessageBox.Show(this, "正在续传，等结束再关。", "提示"); return; } Close(); };
+
+            Controls.AddRange(new Control[] { l1, list, lblInfo, btnAll, btnNone, btnGo, btnClose });
+            RefreshList();
+        }
+
+        void RefreshList()
+        {
+            parts = Core.ScanAria2Partials(modelsDir);
+            list.Items.Clear();
+            foreach (Core.Aria2Partial p in parts)
+            {
+                string s = p.RelPath + "    已下 " + Core.Fmt(p.Done) + " / " + Core.Fmt(p.Total) +
+                           "（" + (p.Total > 0 ? (100.0 * p.Done / p.Total).ToString("0.0") : "0") + "%）" +
+                           (string.IsNullOrEmpty(p.Repo) ? "  [来源未知]" : "");
+                list.Items.Add(s, true);
+            }
+            lblInfo.Text = parts.Count == 0 ? "没有发现未完成的下载（.aria2）"
+                : "共 " + parts.Count + " 个未完成下载，已全部勾选";
+        }
+
+        async void Go()
+        {
+            if (busy) return;
+            List<Core.Aria2Partial> sel = new List<Core.Aria2Partial>();
+            for (int i = 0; i < parts.Count && i < list.Items.Count; i++)
+                if (list.GetItemChecked(i)) sel.Add(parts[i]);
+            if (sel.Count == 0) { MessageBox.Show(this, "先勾选要续传的项。", "提示"); return; }
+
+            int noRepo = 0;
+            foreach (Core.Aria2Partial p in sel) if (string.IsNullOrEmpty(p.Repo)) noRepo++;
+            sel.RemoveAll(delegate(Core.Aria2Partial p) { return string.IsNullOrEmpty(p.Repo); });
+            if (sel.Count == 0)
+            {
+                MessageBox.Show(this, "选中的文件都还原不出仓库名（目录不是 owner__仓库），无法续传。", "提示");
+                return;
+            }
+            if (noRepo > 0)
+                MessageBox.Show(this, noRepo + " 个来源未知的项已跳过。", "提示");
+
+            busy = true;
+            btnGo.Enabled = false; btnAll.Enabled = false; btnNone.Enabled = false; btnClose.Enabled = false;
+            int ok = 0, fail = 0;
+            foreach (Core.Aria2Partial p in sel)
+            {
+                lblInfo.Text = "续传：" + p.RelPath;
+                string err = null;
+                int rc = await Task.Run(() =>
+                {
+                    string inner;
+                    int r = Core.RunAriaTo(Source.HF, mirror, p.Repo, p.SubPath, p.SaveAs, p.Dir,
+                        delegate(string s)
+                        {
+                            Match m = Regex.Match(s ?? "", @"(\d+\.?\d*[KMG]iB)/(\d+\.?\d*[KMG]iB)\((\d+)%\)");
+                            if (!m.Success) return;
+                            try
+                            {
+                                BeginInvoke(new Action(delegate
+                                {
+                                    if (!IsDisposed) lblInfo.Text = "续传：" + p.SaveAs + "  " + m.Groups[1].Value +
+                                        " / " + m.Groups[2].Value + "（" + m.Groups[3].Value + "%）";
+                                }));
+                            }
+                            catch { }
+                        }, null, out inner, null, p.Total, null, null);
+                    err = inner;
+                    return r;
+                });
+                if (rc == 0) ok++;
+                else { fail++; if (!IsDisposed) lblInfo.Text = "失败：" + p.SaveAs + "  " + (err ?? ""); }
+            }
+            busy = false;
+            btnGo.Enabled = true; btnAll.Enabled = true; btnNone.Enabled = true; btnClose.Enabled = true;
+            MessageBox.Show(this, "续传结束：成功 " + ok + "，失败 " + fail, "完成");
+            RefreshList();
         }
     }
 
@@ -3732,7 +3975,7 @@ namespace LocModelDownloader
         Panel pnlBrand;
         PictureBox pictureBox1;
         Label lblStatus, lblTarget;
-        Button btnList, btnStart, btnAll, btnNone, btnCancel;
+        Button btnList, btnStart, btnAll, btnNone, btnCancel, btnResume;
         CheckBox chkAuto, chkShutdown;
         List<Core.FileEntry> files = new List<Core.FileEntry>();
         volatile bool cancelFlag;
@@ -3939,7 +4182,13 @@ namespace LocModelDownloader
             btnTakeover = new Button(); btnTakeover.Text = "接管正在下载的"; btnTakeover.SetBounds(16, 390, 152, 26);
             btnTakeover.Click += delegate { Takeover(); };
 
-            lblTarget = new Label(); lblTarget.SetBounds(334, 394, 404, 20);
+            btnResume = new Button(); btnResume.Text = "继续未完成"; btnResume.SetBounds(600, 390, 158, 26);
+            btnResume.Click += delegate
+            {
+                using (ResumeForm rf = new ResumeForm(modelsDir, EffectiveHfMirror)) rf.ShowDialog(this);
+            };
+
+            lblTarget = new Label(); lblTarget.SetBounds(334, 394, 258, 20);
             lblTarget.Text = "保存到：" + modelsDir;
 
             lblStatus = new Label(); lblStatus.SetBounds(16, 422, 742, 20);
@@ -3959,7 +4208,7 @@ namespace LocModelDownloader
 
             Controls.AddRange(new Control[] {
                 l1, txtRepo, l2, cboSource, txtMirror, btnList, btnToken, btnRepoView, btnDir, btnQueue, btnVerify, l3, clb, pnlBrand,
-                btnAll, btnNone, chkAuto, chkShutdown, btnStart, btnCancel, btnTakeover, btnRecipe, lblTarget, lblStatus, txtLog
+                btnAll, btnNone, chkAuto, chkShutdown, btnStart, btnCancel, btnTakeover, btnResume, btnRecipe, lblTarget, lblStatus, txtLog
             });
 
             clb.Visible = false;
@@ -4228,6 +4477,7 @@ namespace LocModelDownloader
             if (chkShutdown != null) chkShutdown.Enabled = !b;
             btnRecipe.Enabled = !b;
             btnTakeover.Enabled = !b;
+            if (btnResume != null) btnResume.Enabled = !b;
         }
 
         async void Takeover()
@@ -4588,7 +4838,12 @@ namespace LocModelDownloader
             foreach (object o in clb.CheckedItems) chosen.Add((Core.FileEntry)o);
 
             long total = 0;
-            foreach (Core.FileEntry f in chosen) total += f.Size;
+            foreach (Core.FileEntry f in chosen)
+            {
+                string d0 = Path.Combine(modelsDir, Core.FolderFor(string.IsNullOrEmpty(f.Repo) ? repo : f.Repo));
+                string s0 = string.IsNullOrEmpty(f.SaveAs) ? f.Name : f.SaveAs;
+                total += Core.RemainingFor(Path.Combine(d0, s0), f.Size);   // 有 .aria2 时只算剩余
+            }
 
             btnStart.Enabled = false;
             lblStatus.Text = "下载前检查中…";
@@ -5006,6 +5261,17 @@ namespace LocModelDownloader
                                   "  MS:" + (Secrets.Ms.Length > 0 ? "已设置" : "空") +
                                   "  Civitai:" + (Secrets.Civitai.Length > 0 ? "已设置" : "空"));
                 return aria == null ? 1 : 0;
+            }
+            if (args.Length > 0 && args[0] == "--partials")
+            {
+                string md = args.Length > 1 ? args[1] : Core.DetectModelsDir();
+                List<Core.Aria2Partial> ps = Core.ScanAria2Partials(md);
+                Console.WriteLine("models=" + md + "  aria2=" + ps.Count);
+                foreach (Core.Aria2Partial p in ps)
+                    Console.WriteLine("  " + p.RelPath + "\t" + Core.Fmt(p.Done) + " / " + Core.Fmt(p.Total) +
+                        "  (" + p.DonePieces + "/" + p.Pieces + " 片)\t" +
+                        (string.IsNullOrEmpty(p.Repo) ? "来源未知" : p.Repo + " :: " + p.SubPath));
+                return ps.Count == 0 ? 0 : 1;
             }
             if (args.Length > 0 && args[0] == "--scan")
             {
